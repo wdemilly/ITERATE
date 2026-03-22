@@ -22,19 +22,16 @@ def analyze_source_rhythm(text):
     Analyzes source texts (Dare, Quinn, Faulks, etc.) to extract a
     sentence rhythm fingerprint. This becomes the target for revision,
     not an abstract threshold.
-    
-    Returns a dict with the source's actual sentence length profile.
     """
     if not text or not text.strip():
         return None
     
-    # Split into sentences
     sentence_endings = re.split(r'(?<=[.!?])\s+(?=[A-Z"\u201C])', text)
     sentences = [s.strip() for s in sentence_endings if s.strip()]
     lengths = [len(s.split()) for s in sentences]
     
     if len(lengths) < 10:
-        return None  # not enough data
+        return None
     
     total = len(lengths)
     mean_len = sum(lengths) / total
@@ -42,17 +39,15 @@ def analyze_source_rhythm(text):
     std_dev = math.sqrt(variance)
     cv = std_dev / mean_len if mean_len > 0 else 0
     
-    # Distribution buckets
-    ultra_short = sum(1 for l in lengths if l <= 5)       # "He sat." / "She went."
-    short = sum(1 for l in lengths if 6 <= l <= 12)       # Simple declaratives
-    medium = sum(1 for l in lengths if 13 <= l <= 25)     # Standard prose
-    long = sum(1 for l in lengths if 26 <= l <= 40)       # Complex sentences
-    very_long = sum(1 for l in lengths if l > 40)         # Accumulating clauses
+    ultra_short = sum(1 for l in lengths if l <= 5)
+    short = sum(1 for l in lengths if 6 <= l <= 12)
+    medium = sum(1 for l in lengths if 13 <= l <= 25)
+    long = sum(1 for l in lengths if 26 <= l <= 40)
+    very_long = sum(1 for l in lengths if l > 40)
     
-    # Transition patterns: what follows what
-    short_after_long = 0   # <=5 words after >=25 words (jagged rhythm)
-    long_after_short = 0   # >=25 words after <=5 words
-    same_band = 0          # consecutive sentences in same length band
+    short_after_long = 0
+    long_after_short = 0
+    same_band = 0
     
     for i in range(1, len(lengths)):
         prev, curr = lengths[i-1], lengths[i]
@@ -60,22 +55,15 @@ def analyze_source_rhythm(text):
             short_after_long += 1
         if prev <= 5 and curr >= 25:
             long_after_short += 1
-        # Same band check (both ultra-short, both medium, etc.)
         prev_band = 0 if prev <= 5 else (1 if prev <= 12 else (2 if prev <= 25 else 3))
         curr_band = 0 if curr <= 5 else (1 if curr <= 12 else (2 if curr <= 25 else 3))
         if prev_band == curr_band:
             same_band += 1
     
     transitions = total - 1 if total > 1 else 1
-    
-    # Paratactic accumulation: sentences with 3+ "and" 
     paratactic = sum(1 for s in sentences if s.count(' and ') >= 3)
-    
-    # Longest and shortest
     max_len = max(lengths)
     min_len = min(lengths)
-    
-    # Range ratio (max / min) — higher = more variation
     range_ratio = max_len / min_len if min_len > 0 else max_len
     
     return {
@@ -88,11 +76,11 @@ def analyze_source_rhythm(text):
         "max_length": max_len,
         "range_ratio": round(range_ratio, 1),
         "distribution": {
-            "ultra_short_pct": round(100 * ultra_short / total, 1),  # <=5 words
-            "short_pct": round(100 * short / total, 1),              # 6-12
-            "medium_pct": round(100 * medium / total, 1),            # 13-25
-            "long_pct": round(100 * long / total, 1),                # 26-40
-            "very_long_pct": round(100 * very_long / total, 1),      # >40
+            "ultra_short_pct": round(100 * ultra_short / total, 1),
+            "short_pct": round(100 * short / total, 1),
+            "medium_pct": round(100 * medium / total, 1),
+            "long_pct": round(100 * long / total, 1),
+            "very_long_pct": round(100 * very_long / total, 1),
         },
         "transitions": {
             "short_after_long_pct": round(100 * short_after_long / transitions, 1),
@@ -104,9 +92,7 @@ def analyze_source_rhythm(text):
 
 
 def display_source_profile(profile):
-    """Renders the source rhythm profile in Streamlit."""
     st.markdown("### Source Text Rhythm Profile")
-    
     col1, col2, col3 = st.columns(3)
     col1.metric("Sentence CV", profile["cv"], help="Target for chapter rhythm")
     col2.metric("Mean length", f"{profile['mean_length']} words")
@@ -124,50 +110,38 @@ def display_source_profile(profile):
                f"13-25w: {d['medium_pct']}% | 26-40w: {d['long_pct']}% | >40w: {d['very_long_pct']}%")
 
 
-def build_rhythm_instructions(source_profile, chapter_profile):
-    """
-    Compares the chapter's rhythm to the source's rhythm and generates
-    specific revision instructions for sentence length variation.
-    """
+def build_rhythm_instructions(source_profile, chapter_cv):
     if source_profile is None:
         return ""
     
     instructions = []
-    
     src_cv = source_profile["cv"]
-    ch_cv = chapter_profile
     
-    if ch_cv < src_cv - 0.1:
-        gap = round(src_cv - ch_cv, 2)
+    if chapter_cv < src_cv - 0.1:
+        gap = round(src_cv - chapter_cv, 2)
         instructions.append(
             f"SENTENCE RHYTHM: The source authors have a sentence length CV of {src_cv}. "
-            f"This chapter is at {ch_cv} — {gap} points too uniform. To fix this:"
+            f"This chapter is at {chapter_cv} — {gap} points too uniform. To fix this:"
         )
-        
         src_d = source_profile["distribution"]
         instructions.append(
             f"- Source distribution: {src_d['ultra_short_pct']}% ultra-short (≤5 words), "
             f"{src_d['very_long_pct']}% very long (>40 words). "
-            f"The chapter needs MORE of both extremes — more 2-4 word sentences AND more 35-50 word accumulating sentences."
+            f"The chapter needs MORE of both extremes."
         )
-        
         src_t = source_profile["transitions"]
         if src_t["short_after_long_pct"] > 5:
             instructions.append(
                 f"- In the source texts, {src_t['short_after_long_pct']}% of sentences ≤5 words follow sentences ≥25 words. "
-                f"After a long descriptive sentence, follow it with something brutally short: 'She went.' / 'I knew.' / 'Small mercies.'"
+                f"After a long sentence, follow it with something brutally short: 'She went.' / 'I knew.' / 'Small mercies.'"
             )
-        
         if source_profile["paratactic_pct"] > 2:
             instructions.append(
-                f"- The source texts use paratactic accumulation (3+ 'and' in a sentence) {source_profile['paratactic_pct']}% of the time. "
-                f"Occasionally fuse two medium sentences into one long one using 'and...and...and' rhythm: "
-                f"'the gate open and the yard swept and everything that needed doing, done.'"
+                f"- Source texts use paratactic accumulation {source_profile['paratactic_pct']}% of the time. "
+                f"Occasionally fuse two medium sentences into one long one using 'and...and...and' rhythm."
             )
-        
         instructions.append(
-            "- Do NOT just break long sentences into medium ones — that makes CV worse. "
-            "Add ultra-short sentences (2-5 words) after long passages AND let some sentences run long with accumulating clauses."
+            "- Do NOT just break long sentences into medium ones — that makes CV worse."
         )
     
     return "\n".join(instructions)
@@ -179,21 +153,16 @@ def build_rhythm_instructions(source_profile, chapter_profile):
 
 def score_chapter(text):
     """
-    Scores a chapter against 11 detection metrics derived from
-    reverse-engineering Originality.ai's Lite 1.0.2 detector across
-    1,925 segments (54,721 words) and 17 separate documents.
-    
-    Returns a dict with metric scores, overall risk assessment,
-    and flagged passages with line-level detail.
+    Scores a chapter against 12 detection metrics derived from
+    reverse-engineering Originality.ai's Lite 1.0.2 detector.
     """
     words = text.split()
     word_count = len(words)
     if word_count == 0:
         return None
     
-    kw = word_count / 1000  # per-thousand-word normalizer
+    kw = word_count / 1000
     
-    # ── Split into sentences ──
     sentence_endings = re.split(r'(?<=[.!?])\s+(?=[A-Z"\u201C])', text)
     sentences = [s.strip() for s in sentence_endings if s.strip()]
     sentence_lengths = [len(s.split()) for s in sentences]
@@ -208,7 +177,7 @@ def score_chapter(text):
     as_though_rate = (as_though_count + as_if_count) / kw if kw > 0 else 0
     
     # ── 3. "The way he/she/they/I/men/people" density ──
-    the_way_count = len(re.findall(r'\bthe way (?:he|she|they|I|it|men|women|people|a man|a woman|soldiers|hungry men)\b', text, re.I))
+    the_way_count = len(re.findall(r'\bthe way (?:he|she|they|I|it|men|women|people|a man|a woman|soldiers|hungry men|anyone|you|one)\b', text, re.I))
     the_way_rate = the_way_count / kw if kw > 0 else 0
     
     # ── 4. Negation-leading constructions ──
@@ -231,7 +200,7 @@ def score_chapter(text):
     dialogue_words = sum(len(m.split()) for m in dialogue_matches)
     dialogue_pct = (dialogue_words / word_count * 100) if word_count > 0 else 0
     
-    # ── 7. Sentence length variation (coefficient of variation) ──
+    # ── 7. Sentence length variation (CV) ──
     if len(sentence_lengths) > 1:
         mean_len = sum(sentence_lengths) / len(sentence_lengths)
         variance = sum((x - mean_len) ** 2 for x in sentence_lengths) / len(sentence_lengths)
@@ -252,29 +221,29 @@ def score_chapter(text):
     analytical_rate = analytical_frames / kw if kw > 0 else 0
     
     # ── 10. "Of a man/woman/person who" characterization ──
-    of_person_who = len(re.findall(r'\bof a (?:man|woman|person|people) who\b', text, re.I))
+    of_person_who = len(re.findall(r'\bof (?:a |someone |a man |a woman |a person |the kind of |the sort of )?(?:man|woman|person|someone|people) who\b', text, re.I))
     of_person_rate = of_person_who / kw if kw > 0 else 0
     
     # ── 11. Constructed similes and metaphors ──
-    # Catches: "as though", "as if", "the way [pronoun]", "like a [noun] that/who/which",
-    # "the kind of [noun] that", "[verb]ed the way", "as a [noun] [verb]s",
-    # and extended metaphor constructions.
-    # Does NOT catch dead metaphors or idioms (those are too varied to regex).
     simile_patterns = [
         r'\bas though\b',
         r'\bas if\b',
-        r'\bthe way (?:he|she|they|I|it|men|women|people|a man|a woman|soldiers|hungry)\b',
+        r'\bthe way (?:he|she|they|I|it|men|women|people|a man|a woman|soldiers|hungry|anyone|you|one)\b',
         r'\blike a [a-z]+ (?:that|who|which)\b',
-        r'\blike a [a-z]+ [a-z]+ing\b',           # "like a man carrying..."
-        r'\bthe kind of [a-z]+ (?:that|who|which|you)\b',  # "the kind of man who..."
+        r'\blike a [a-z]+ [a-z]+ing\b',
+        r'\blike an? [a-z]+\b',                     # "like an invalid", "like a prayer"
+        r'\bthe kind of [a-z]+ (?:that|who|which|you)\b',
         r'\bthe sort of [a-z]+ (?:that|who|which|you)\b',
-        r'\b[a-z]+ed the way [a-z]+\b',            # "moved the way soldiers..."
-        r'\bas a [a-z]+ (?:does|would|might|could|who)\b',  # "as a man does", "as a man who"
-        r'\bthe particular [a-z]+ (?:of|that)\b',  # "the particular quality of"
-        r'\bwith the [a-z]+ of a\b',               # "with the patience of a"
-        r'\bhad the [a-z]+ of a\b',                # "had the eyes of a"
+        r'\b[a-z]+ed the way [a-z]+\b',
+        r'\bas a [a-z]+ (?:does|would|might|could|who)\b',
+        r'\bthe particular [a-z]+ (?:of|that|I|she|he|it)\b',
+        r'\bwith the [a-z]+ [a-z]+ of (?:a|someone|an)\b',    # "with the calm authority of a"
+        r'\bwith the [a-z]+ of a\b',                            # "with the patience of a"
+        r'\bhad the [a-z]+ of a\b',
         r'\bin the manner of\b',
         r'\bwith the air of\b',
+        r'\bthe [a-z]+ of survival\b',              # "the arithmetic of survival"
+        r'\bthe [a-z]+ of (?:male |female )?(?:pride|fear|grief|joy|despair|hope)\b',  # "the momentum of male pride"
     ]
     simile_count = 0
     simile_matches_all = []
@@ -282,11 +251,31 @@ def score_chapter(text):
         found = re.findall(pat, text, re.I)
         simile_count += len(found)
         simile_matches_all.extend(found)
-    # Deduplicate: "as though" and "as if" are already counted in metric 2,
-    # but we want the combined simile count for the new metric
     simile_rate = simile_count / kw if kw > 0 else 0
     
-    # ── Scoring: each metric gets GREEN / YELLOW / RED ──
+    # ── 12. Editorial commentary ──
+    # Sentences where the narrator explains what just happened or 
+    # draws a moral/conclusion the reader can draw themselves.
+    editorial_patterns = [
+        r'^This was (?:what|how|the)\b',
+        r'^That was (?:what|how|the)\b',
+        r'\bwhich meant (?:that |neither |both |every |we |she |he |I )\b',
+        r'\band that made (?:all )?the difference\b',
+        r'\bthe arithmetic of\b',
+        r'\bthe mathematics of\b',
+        r'\bevery (?:small )?(?:victory|compromise|expense|decision|loss) (?:counted|mattered|had consequences)\b',
+        r'\b(?:neither|both) of us (?:was|were|could|had|knew)\b',
+        r'\bThis was the (?:foundation|arithmetic|mathematics|logic|rhythm|pattern|way)\b',
+    ]
+    editorial_count = 0
+    for sent in sentences:
+        for pat in editorial_patterns:
+            if re.search(pat, sent, re.I):
+                editorial_count += 1
+                break
+    editorial_rate = editorial_count / kw if kw > 0 else 0
+    
+    # ── Scoring ──
     metrics = {}
     
     def rate(name, value, green_thresh, yellow_thresh, unit, invert=False):
@@ -317,6 +306,7 @@ def score_chapter(text):
     rate("Analytical frames", analytical_rate, 0.0, 0.2, "/1000w")
     rate("'Of a person who' density", of_person_rate, 0.0, 0.3, "/1000w")
     rate("Constructed simile density", simile_rate, 1.0, 3.0, "/1000w")
+    rate("Editorial commentary", editorial_rate, 0.0, 0.3, "/1000w")
     
     # ── Flag specific high-risk passages ──
     flagged = []
@@ -330,10 +320,10 @@ def score_chapter(text):
         if re.search(r'\bas though\b|\bas if\b', sent, re.I):
             risks.append("as_though")
         
-        if re.search(r'\bthe way (?:he|she|they|I|it|men|women|people|a man|a woman|soldiers|hungry)\b', sent, re.I):
+        if re.search(r'\bthe way (?:he|she|they|I|it|men|women|people|a man|a woman|soldiers|hungry|anyone|you|one)\b', sent, re.I):
             risks.append("the_way")
         
-        if re.search(r'\bof a (?:man|woman|person) who\b', sent, re.I):
+        if re.search(r'\bof (?:a |someone |a man |a woman |a person )?(?:man|woman|person|someone|people) who\b', sent, re.I):
             risks.append("of_person_who")
         
         if re.search(r'\b(?:I\s+)?(?:noted|filed|registered|understood|recognised|recognized)\b', sent, re.I):
@@ -354,23 +344,33 @@ def score_chapter(text):
             if re.search(r'\bas though\b|\bthe way\b|\bwhich (?:was|meant|told)\b', sent, re.I):
                 risks.append("obs_interp_coupling")
         
-        # Constructed simile detection at sentence level
+        # Constructed simile at sentence level
         simile_sentence_patterns = [
             r'\blike a [a-z]+ (?:that|who|which)\b',
             r'\blike a [a-z]+ [a-z]+ing\b',
+            r'\blike an? [a-z]+\b',
             r'\bthe kind of [a-z]+ (?:that|who|which|you)\b',
             r'\bthe sort of [a-z]+ (?:that|who|which|you)\b',
             r'\b[a-z]+ed the way [a-z]+\b',
             r'\bas a [a-z]+ (?:does|would|might|could|who)\b',
+            r'\bwith the [a-z]+ [a-z]+ of (?:a|someone|an)\b',
             r'\bwith the [a-z]+ of a\b',
             r'\bhad the [a-z]+ of a\b',
             r'\bin the manner of\b',
             r'\bwith the air of\b',
-            r'\bthe particular [a-z]+ (?:of|that)\b',
+            r'\bthe particular [a-z]+ (?:of|that|I|she|he|it)\b',
+            r'\bthe [a-z]+ of survival\b',
+            r'\bthe [a-z]+ of (?:male |female )?(?:pride|fear|grief|joy|despair|hope)\b',
         ]
         for sp in simile_sentence_patterns:
             if re.search(sp, sent, re.I):
                 risks.append("constructed_simile")
+                break
+        
+        # Editorial commentary at sentence level
+        for pat in editorial_patterns:
+            if re.search(pat, sent, re.I):
+                risks.append("editorial")
                 break
         
         if risks:
@@ -410,6 +410,7 @@ def score_chapter(text):
             "the_way_total": the_way_count,
             "negation_total": negation_count,
             "simile_total": simile_count,
+            "editorial_total": editorial_count,
             "dialogue_word_pct": round(dialogue_pct, 1),
             "mean_sentence_length": round(mean_len, 1),
             "flagged_sentences": len(flagged),
@@ -418,90 +419,194 @@ def score_chapter(text):
     }
 
 
-def build_revision_prompt(chapter_text, score_result, source_profile=None):
+# ──────────────────────────────────────────────
+# THREE-PASS ARCHITECTURE: WRITE → CUT → FILL
+# ──────────────────────────────────────────────
+
+def build_cutting_prompt(chapter_text, score_result):
     """
-    Builds a targeted revision prompt that identifies specific flagged
-    passages and tells the model how to fix them without destroying
-    the writing.
+    PASS 2: THE BLADE.
+    
+    Identifies flagged passages and tells the model to DELETE them.
+    No rewriting. No replacement imagery. Just removal and gap closure.
+    The model outputs the complete chapter with flagged material excised.
     """
     flagged = score_result["flagged"]
     metrics = score_result["metrics"]
     
-    top_flagged = flagged[:15]
+    top_flagged = flagged[:25]
     
-    risk_descriptions = {
-        "em_dash": "Contains em dash — often used for interpretive gloss. Replace with a period and a new sentence, or remove the gloss entirely.",
-        "as_though": "Contains 'as though' or 'as if' — appends speculative interpretation to concrete observation. Cut the simile. Let the action stand alone.",
-        "the_way": "Contains 'the way he/she/they' — embeds interpretation inside description. Replace with direct physical observation.",
-        "of_person_who": "Contains 'of a man/woman who' — analytical characterization. Replace with action or a short direct statement.",
-        "metacognitive": "Contains metacognitive verb (noted/filed/registered/understood). Show through action, don't narrate the cognitive process.",
-        "fact_that": "Contains 'the fact that' — analytical abstraction. Remove the frame; state the fact directly.",
-        "negation_leading": "Negation-leading construction — defines by what something is not. Replace with a direct assertion of what it is.",
-        "long_compound": "Long compound sentence with many commas — may read as inventory or process narration. Consider breaking into shorter sentences OR following with a brutally short sentence (2-5 words).",
-        "obs_interp_coupling": "Observation-interpretation coupling — concrete detail and interpretive gloss fused in one sentence. Separate them or cut the interpretation.",
-        "constructed_simile": "Constructed simile or metaphor — literary comparison that reads as crafted rather than natural. Replace with a flat statement, an idiom, or cut entirely. Only colloquial/idiomatic figures of speech pass detection."
-    }
-    
+    # Build the list of passages to cut
     passage_list = ""
     for i, item in enumerate(top_flagged):
-        risks_text = "; ".join(risk_descriptions.get(r, r) for r in item["risks"])
-        passage_list += f"\n\nFLAGGED PASSAGE {i+1}:\n\"{item['sentence'][:300]}\"\nISSUES: {risks_text}"
+        risk_labels = ", ".join(item["risks"])
+        passage_list += f'\n\nCUT {i+1} [{risk_labels}]:\n"{item["sentence"][:300]}"'
     
     metric_warnings = ""
     for name, data in metrics.items():
         if data["level"] == "RED":
-            metric_warnings += f"\n- {name}: {data['value']} {data['unit']} — RED (high detection risk)"
+            metric_warnings += f"\n- {name}: {data['value']} {data['unit']} — RED"
         elif data["level"] == "YELLOW":
-            metric_warnings += f"\n- {name}: {data['value']} {data['unit']} — YELLOW (moderate risk)"
+            metric_warnings += f"\n- {name}: {data['value']} {data['unit']} — YELLOW"
     
-    # Build rhythm instructions from source profile
-    chapter_cv = metrics.get("Sentence length CV", {}).get("value", 0)
-    rhythm_block = build_rhythm_instructions(source_profile, chapter_cv)
-    
-    prompt = f"""You are revising a chapter of fiction to reduce AI detection risk while preserving the voice, content, and literary quality.
+    prompt = f"""You are performing a CUTTING PASS on a chapter of fiction. Your job is to DELETE material that triggers AI detection. You are a blade, not a writer.
 
-IMPORTANT RULES:
-- Preserve the original text wherever possible. Only modify flagged passages.
-- Do NOT rewrite the entire chapter. Output the COMPLETE chapter with only the flagged passages revised.
-- Do NOT add new content, scenes, or dialogue that wasn't there before.
-- Do NOT remove scenes, beats, or plot points.
-- Revisions should make the prose sound more like someone talking and less like someone writing.
-- Prefer colloquial, idiomatic, tossed-off phrasing over composed literary images.
-- When replacing an em dash gloss, don't just move the gloss to a new sentence — consider cutting it entirely if the image works without it.
-- When cutting "as though" or "the way" constructions, let the physical action stand alone. Trust the reader.
-- ELIMINATE all constructed similes and metaphors. Replace "as though [interpretation]", "the way [pronoun] [verb]s when...", "like a [noun] that...", "with the air of a...", "the kind of [noun] who..." with either: (a) a flat direct statement, (b) an idiomatic/colloquial phrase, or (c) nothing — just cut it. The only figurative language that passes detection is dead metaphors and idioms that a person would say without thinking ("a rag that had seen worse" = good; "as though hurrying would remind his body how long it had been" = bad).
-- Do NOT introduce new em dashes, "as though" constructions, similes, metaphors, or metacognitive verbs.
-{rhythm_block}
+RULES — READ CAREFULLY:
 
-CHAPTER METRICS (current scores):
+1. DEFAULT ACTION IS DELETE. When you encounter a flagged passage, your first instinct must be to remove it entirely. Not rewrite it. Not rephrase it. Delete it.
+
+2. CLOSE THE GAP. After deleting a passage, connect the sentence before it to the sentence after it. If the connection reads naturally, you are done. If the connection needs a bridge, write ONE short plain sentence (under 10 words) to smooth the transition. Nothing more.
+
+3. NEVER GENERATE REPLACEMENT IMAGERY. Do not replace a deleted simile with a new simile. Do not replace a deleted metaphor with a new metaphor. Do not replace editorial commentary with different editorial commentary. The replacement for a constructed image is NOTHING.
+
+4. SPECIFIC CONSTRUCTIONS TO DELETE ON SIGHT:
+   - "with the [adjective] [noun] of someone/a man/a woman who..." → DELETE the entire phrase. Keep only the action it was attached to.
+   - "the kind/sort of [noun] that/who..." → DELETE. Replace with the plain noun if needed.
+   - "like a [noun] that/who..." → DELETE the comparison entirely.
+   - "as though [interpretation]" → DELETE everything after "as though."
+   - "the particular [noun] of/that..." → DELETE. Use a plain adjective or nothing.
+   - "the [abstract noun] of [abstract noun]" (e.g., "the arithmetic of survival", "the momentum of male pride") → DELETE the entire phrase.
+   - "with the air of..." → DELETE.
+   - Any sentence beginning with "This was what..." or "This was how..." or "That was the..." where the narrator explains what just happened → DELETE THE ENTIRE SENTENCE.
+   - Any sentence containing "every [noun] mattered/counted/had consequences" → DELETE THE ENTIRE SENTENCE.
+   - Any sentence containing "neither of us" + editorial observation → DELETE THE ENTIRE SENTENCE.
+   - Any sentence that interprets a scene the reader has already witnessed → DELETE IT.
+
+5. PRESERVE EVERYTHING ELSE. Do not touch dialogue. Do not touch physical action. Do not touch scene transitions. Do not touch plot beats. Only cut what is flagged or matches the patterns above.
+
+6. THE CHAPTER WILL BE SHORTER AFTER THIS PASS. That is correct. Do not try to maintain word count. The next pass will add new material. Your job is only to cut.
+
+7. OUTPUT THE COMPLETE CHAPTER with your cuts applied. Every sentence that is NOT flagged or matched to the patterns above must appear in your output exactly as written.
+
+CURRENT METRICS:
 {metric_warnings}
 
-The following passages have been identified as highest detection risk:
+PASSAGES TO CUT:
 {passage_list}
 
-Here is the complete chapter. Revise ONLY the flagged passages. Output the full chapter text with your revisions in place.
+IMPORTANT: Also scan the ENTIRE chapter for any instances of the patterns in rule 4 that were not flagged above. The flagging system catches most but not all. If you see "with the calm authority of someone who had done this a hundred times" anywhere in the text, cut it even if it was not in the flagged list.
 
 <chapter>
 {chapter_text}
-</chapter>"""
+</chapter>
+
+Output the complete chapter with all cuts applied. Do not add any commentary before or after the chapter text."""
     
     return prompt
 
 
+def build_fill_prompt(cut_chapter, original_word_count, prompt_text, outline_text, source_text, char_text, source_profile=None):
+    """
+    PASS 3: THE FILL.
+    
+    Takes the cut chapter (shorter than original), the original writing prompt,
+    outline, source texts, and character profiles. Generates new material
+    to restore word count, anchored to the outline's microbeats and the
+    source texts' voice — not to the model's default literary instincts.
+    """
+    cut_word_count = len(cut_chapter.split())
+    deficit = original_word_count - cut_word_count
+    
+    # Build rhythm instructions if we have source profile
+    chapter_cv = 0
+    sentence_endings = re.split(r'(?<=[.!?])\s+(?=[A-Z"\u201C])', cut_chapter)
+    sents = [s.strip() for s in sentence_endings if s.strip()]
+    if len(sents) > 1:
+        lengths = [len(s.split()) for s in sents]
+        m = sum(lengths) / len(lengths)
+        v = sum((x - m) ** 2 for x in lengths) / len(lengths)
+        chapter_cv = round(math.sqrt(v) / m, 3) if m > 0 else 0
+    
+    rhythm_block = build_rhythm_instructions(source_profile, chapter_cv) if source_profile else ""
+    
+    prompt = f"""You are performing a FILL PASS on a chapter of fiction. The chapter has been through a cutting pass that removed AI-detectable constructions (similes, metaphors, editorial commentary, interpretive glosses). It is now {cut_word_count:,} words. The original was {original_word_count:,} words. You need to add approximately {deficit} words of new material.
+
+YOUR ANCHOR DOCUMENTS:
+
+The chapter outline below specifies every microbeat in the chapter — what happens, what the characters say, what the narrator notices, and what the narrator does NOT do. The source texts below are your voice model. The character profiles below tell you who these people are.
+
+RULES — READ CAREFULLY:
+
+1. IDENTIFY THE THIN SPOTS. Read the cut chapter against the outline. Where did the cuts leave two scene beats too close together? Where did a transition disappear? Where did a physical detail get lost? Where is a SCENE-weight microbeat now underserved? Those are your insertion points.
+
+2. WRITE NEW MATERIAL FOR THOSE SPOTS. Not replacement material — new material. You have never seen the deleted text. You are writing fresh sentences that belong in these gaps, per the outline's specifications for each microbeat.
+
+3. ANCHOR TO THE SOURCE TEXTS. Before writing each new sentence, silently identify which source passage's rhythm, construction, and punctuation you are channeling. Do not cite it. Do not reproduce it. Let it guide the sentence's shape, then write original prose in the narrator's voice. The source passage is the blueprint. The words are yours.
+
+4. MATCH THE SURROUNDING VOICE. For each insertion point, read the sentence immediately before and immediately after the gap. Your new material must sound like it was written in the same breath — same register, same rhythm, same level of plainness or compression. Do not shift gears.
+
+5. BANNED CONSTRUCTIONS — DO NOT USE ANY OF THESE:
+   - Em dashes (use periods and new sentences instead)
+   - "as though" / "as if" + interpretation
+   - "the way he/she/they" + interpretation
+   - "with the [adjective] [noun] of someone/a man/a woman who"
+   - "the kind/sort of [noun] that/who"
+   - "like a [noun] that/who" (constructed similes)
+   - "the particular [noun] of"
+   - "the [abstract noun] of [abstract noun]" (metaphorical equations)
+   - "with the air of"
+   - Sentences beginning "This was what/how" (editorial summaries)
+   - Sentences that explain, interpret, or editorialize about what just happened
+   - Metacognitive verbs: noted, registered, filed, observed, understood, recognised
+   - "of a man/woman/person who" characterization clauses
+   - "not X but Y" analytical framing
+   - "the fact that"
+   - Any sentence that tells the reader what to think about an action they just witnessed
+
+6. WHAT TO WRITE INSTEAD:
+   - Physical action. What does the character do with her hands, her feet, her eyes?
+   - Dialogue. The outline specifies weapons and resolutions for each exchange. Write more of the exchange.
+   - Specific sensory detail. Not atmosphere — specific objects. A nail, a stain, a sound, a smell.
+   - Dinah's opinions. She has opinions about everything. They are short, direct, and ungenerous. They do not philosophise.
+   - Plain declarative sentences. "The bolt stuck." "He left." "I counted twice."
+   - Vary sentence lengths aggressively. Follow a long sentence with a 2-5 word sentence. Follow a short sentence with a long accumulating clause using "and...and...and" rhythm.
+
+{rhythm_block}
+
+7. SEAMLESS MELDING. The reader must not be able to tell where the old material ends and the new material begins. Read the sentence before, write your insertion, read the sentence after. If the join is visible, rewrite the join until it disappears.
+
+8. OUTPUT THE COMPLETE CHAPTER with all new material woven in. Every original sentence that survived the cut must appear exactly as written. Your new material sits between them.
+
+<source_texts>
+{source_text if source_text else "(No source texts provided)"}
+</source_texts>
+
+<character_profiles>
+{char_text if char_text else "(No character profiles provided)"}
+</character_profiles>
+
+<chapter_outline>
+{outline_text}
+</chapter_outline>
+
+<writing_prompt>
+{prompt_text}
+</writing_prompt>
+
+<cut_chapter>
+{cut_chapter}
+</cut_chapter>
+
+Output the complete chapter with new material seamlessly woven in. Do not add any commentary before or after the chapter text."""
+    
+    return prompt
+
+
+# Legacy revision prompt for manual revise button
+def build_revision_prompt(chapter_text, score_result, source_profile=None):
+    """Backward-compatible revision prompt for the manual 'Revise This Text' button."""
+    return build_cutting_prompt(chapter_text, score_result)
+
+
 def generate_report(score_result, chapter_text, label, pass_num, source_profile=None):
-    """
-    Generates a Word document report for a scoring pass.
-    Contains: summary, metrics table, rhythm comparison, flagged passages with context.
-    """
+    """Generates a Word document report for a scoring pass."""
     doc = Document()
     style = doc.styles['Normal']
     style.font.name = 'Calibri'
     style.font.size = Pt(11)
     
-    # Title
     title = doc.add_heading(f'Detection Score Report — {label}', level=1)
     
-    # Summary paragraph
     summary = score_result["summary"]
     overall = score_result["overall"]
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -515,7 +620,6 @@ def generate_report(score_result, chapter_text, label, pass_num, source_profile=
               f"Flagged sentences: {summary['flagged_sentences']} of {summary['total_sentences']} "
               f"({round(100*summary['flagged_sentences']/max(summary['total_sentences'],1))}%)\n")
     
-    # Overall risk
     p2 = doc.add_paragraph()
     risk_run = p2.add_run(f"OVERALL: {overall}")
     risk_run.bold = True
@@ -529,7 +633,6 @@ def generate_report(score_result, chapter_text, label, pass_num, source_profile=
     
     p2.add_run(f"  ({score_result['red_count']} RED, {score_result['yellow_count']} YELLOW, {score_result['green_count']} GREEN)")
     
-    # Metrics table
     doc.add_heading('Metrics', level=2)
     
     table = doc.add_table(rows=1, cols=4)
@@ -546,7 +649,6 @@ def generate_report(score_result, chapter_text, label, pass_num, source_profile=
         row[1].text = str(data["value"])
         row[2].text = data["unit"]
         row[3].text = data["level"]
-        # Color the status cell
         for paragraph in row[3].paragraphs:
             for run in paragraph.runs:
                 if data["level"] == "RED":
@@ -558,16 +660,15 @@ def generate_report(score_result, chapter_text, label, pass_num, source_profile=
                 else:
                     run.font.color.rgb = RGBColor(0, 130, 0)
     
-    # Counts summary
     doc.add_paragraph(
         f"Em dashes: {summary['em_dashes']} | "
         f"'As though/if': {summary['as_though_total']} | "
         f"'The way': {summary['the_way_total']} | "
         f"Negation-leading: {summary['negation_total']} | "
-        f"Constructed similes: {summary['simile_total']}"
+        f"Similes: {summary['simile_total']} | "
+        f"Editorial: {summary['editorial_total']}"
     )
     
-    # Source rhythm comparison
     if source_profile:
         doc.add_heading('Sentence Rhythm — Source Comparison', level=2)
         ch_cv = score_result["metrics"].get("Sentence length CV", {}).get("value", 0)
@@ -585,15 +686,15 @@ def generate_report(score_result, chapter_text, label, pass_num, source_profile=
         rhythm_rows = [
             ("Sentence CV", str(src_cv), str(ch_cv)),
             ("Mean sentence length", f"{source_profile['mean_length']}w", f"{summary['mean_sentence_length']}w"),
-            ("Range (min–max)", f"{source_profile['min_length']}–{source_profile['max_length']}w", "—"),
-            ("Ultra-short (≤5w)", f"{src_d['ultra_short_pct']}%", "—"),
-            ("Short (6-12w)", f"{src_d['short_pct']}%", "—"),
-            ("Medium (13-25w)", f"{src_d['medium_pct']}%", "—"),
-            ("Long (26-40w)", f"{src_d['long_pct']}%", "—"),
-            ("Very long (>40w)", f"{src_d['very_long_pct']}%", "—"),
-            ("Short-after-long transitions", f"{src_t['short_after_long_pct']}%", "—"),
-            ("Same-band consecutive", f"{src_t['same_band_pct']}%", "—"),
-            ("Paratactic (3+ 'and')", f"{source_profile['paratactic_pct']}%", "—"),
+            ("Range (min-max)", f"{source_profile['min_length']}-{source_profile['max_length']}w", "-"),
+            ("Ultra-short (<=5w)", f"{src_d['ultra_short_pct']}%", "-"),
+            ("Short (6-12w)", f"{src_d['short_pct']}%", "-"),
+            ("Medium (13-25w)", f"{src_d['medium_pct']}%", "-"),
+            ("Long (26-40w)", f"{src_d['long_pct']}%", "-"),
+            ("Very long (>40w)", f"{src_d['very_long_pct']}%", "-"),
+            ("Short-after-long", f"{src_t['short_after_long_pct']}%", "-"),
+            ("Same-band consecutive", f"{src_t['same_band_pct']}%", "-"),
+            ("Paratactic (3+ 'and')", f"{source_profile['paratactic_pct']}%", "-"),
         ]
         for measure, src_val, ch_val in rhythm_rows:
             row = rtable.add_row().cells
@@ -604,30 +705,25 @@ def generate_report(score_result, chapter_text, label, pass_num, source_profile=
         gap = round(src_cv - ch_cv, 3)
         if gap > 0.1:
             p_rhythm = doc.add_paragraph()
-            r = p_rhythm.add_run(f"Rhythm gap: {gap} — chapter is too uniform compared to source texts.")
+            r = p_rhythm.add_run(f"Rhythm gap: {gap}")
             r.font.color.rgb = RGBColor(200, 150, 0)
             r.bold = True
     
-    # Flagged passages
     flagged = score_result["flagged"]
     if flagged:
         doc.add_heading(f'Flagged Passages ({len(flagged)})', level=2)
-        
         for item in flagged[:25]:
             p = doc.add_paragraph()
             tag_run = p.add_run(f"[{item['risk_count']} flags: {', '.join(item['risks'])}]")
             tag_run.bold = True
             tag_run.font.size = Pt(9)
             tag_run.font.color.rgb = RGBColor(180, 0, 0)
-            
             p2 = doc.add_paragraph()
             text_run = p2.add_run(item['sentence'][:400])
             text_run.font.size = Pt(10)
             text_run.italic = True
-            
-            doc.add_paragraph()  # spacer
+            doc.add_paragraph()
     
-    # Full chapter text
     doc.add_heading('Full Chapter Text', level=2)
     for para_text in chapter_text.split("\n"):
         if para_text.strip():
@@ -640,8 +736,6 @@ def generate_report(score_result, chapter_text, label, pass_num, source_profile=
 
 
 def display_scorecard(score_result, source_profile=None):
-    """Renders the scorecard in Streamlit."""
-    
     st.markdown("### Detection Risk Scorecard")
     
     overall = score_result["overall"]
@@ -652,7 +746,6 @@ def display_scorecard(score_result, source_profile=None):
     else:
         st.success(f"Overall: {overall} — {score_result['red_count']} red, {score_result['yellow_count']} yellow, {score_result['green_count']} green")
     
-    # Metrics table — 4 columns to fit 11 metrics
     col1, col2, col3, col4 = st.columns(4)
     metric_items = list(score_result["metrics"].items())
     
@@ -669,9 +762,8 @@ def display_scorecard(score_result, source_profile=None):
     s = score_result["summary"]
     st.caption(f"{s['total_sentences']} sentences | Mean length: {s['mean_sentence_length']} words | "
                f"{s['flagged_sentences']} flagged ({round(100*s['flagged_sentences']/max(s['total_sentences'],1))}%) | "
-               f"Dialogue: {s['dialogue_word_pct']}% | Similes: {s['simile_total']}")
+               f"Dialogue: {s['dialogue_word_pct']}% | Similes: {s['simile_total']} | Editorial: {s['editorial_total']}")
     
-    # Source rhythm comparison
     if source_profile:
         ch_cv = score_result["metrics"].get("Sentence length CV", {}).get("value", 0)
         src_cv = source_profile["cv"]
@@ -681,9 +773,8 @@ def display_scorecard(score_result, source_profile=None):
         if gap > 0.1:
             st.warning(
                 f"**Rhythm gap:** Chapter CV {ch_cv} vs Source CV {src_cv} (gap: {gap}). "
-                f"Source has {src_d['ultra_short_pct']}% ultra-short sentences (≤5w) and "
-                f"{src_d['very_long_pct']}% very long (>40w). "
-                f"Short-after-long transitions: {source_profile['transitions']['short_after_long_pct']}%."
+                f"Source has {src_d['ultra_short_pct']}% ultra-short (<=5w) and "
+                f"{src_d['very_long_pct']}% very long (>40w)."
             )
         elif gap > 0:
             st.info(f"Rhythm close to source: Chapter CV {ch_cv} vs Source CV {src_cv}.")
@@ -708,7 +799,7 @@ with st.sidebar:
     st.header("Settings")
     api_key = st.text_input("Anthropic API Key", type="password")
     
-    model_choice = st.selectbox("Model", [
+    model_choice = st.selectbox("Writing Model", [
         "Sonnet",
         "Sonnet Extended Thinking",
         "Opus",
@@ -732,17 +823,23 @@ with st.sidebar:
         st.caption("Extended thinking requires temperature = 1.0.")
     
     st.markdown("---")
-    st.header("Revision Settings")
-    auto_revise = st.checkbox("Auto-revise after scoring", value=False)
-    max_revision_passes = st.slider("Max revision passes", 1, 3, 2)
+    st.header("Three-Pass Pipeline")
+    st.caption("WRITE → CUT → FILL")
+    auto_pipeline = st.checkbox("Run full pipeline (Write + Cut + Fill)", value=False)
+    run_cut_pass = st.checkbox("Run cutting pass", value=True, help="Deletes AI-detectable constructions")
+    run_fill_pass = st.checkbox("Run fill pass", value=True, help="Adds new material per outline to restore word count")
     
     st.markdown("---")
-    st.header("Revision Model")
-    revision_model_choice = st.selectbox("Model for revisions", [
+    st.header("Cut/Fill Model")
+    revision_model_choice = st.selectbox("Model for Cut and Fill passes", [
         "Same as writing model",
         "Sonnet",
+        "Sonnet Extended Thinking",
         "Haiku"
     ])
+    
+    if revision_model_choice == "Sonnet Extended Thinking":
+        rev_thinking_budget = st.number_input("Cut/Fill Thinking Budget", min_value=1000, max_value=50000, value=10000, step=1000, key="rev_think")
 
 
 # ──────────────────────────────────────────────
@@ -754,7 +851,7 @@ col1, col2, col3 = st.columns(3)
 with col1:
     source_file = st.file_uploader("Source Texts", type=["txt", "docx"])
 with col2:
-    char_file = st.file_uploader("Character Profiles / Parts Bin", type=["txt", "docx"])
+    char_file = st.file_uploader("Character Profiles", type=["txt", "docx"])
 with col3:
     outline_file = st.file_uploader("Chapter Outline", type=["txt", "docx"])
 
@@ -768,14 +865,17 @@ def read_uploaded(f):
         return "\n".join([p.text for p in doc.paragraphs])
     return ""
 
-prompt_default = """Using the source texts, character profiles, and chapter outline provided, write the chapter in one continuous pass from first sentence to last. Do not draft short and expand."""
+prompt_default = """Using the source texts, character profiles, and chapter outline provided, write the chapter in one continuous pass from first sentence to last. Do not draft short and expand.
+
+Before writing each sentence, silently identify which source passage's rhythm, construction, and punctuation you are channeling. Do not cite it. Do not reproduce it. Let it guide the sentence's shape, then write original prose in the narrator's voice. The source passage is the blueprint. The words are yours.
+
+Do not construct sentences that explain, interpret, or editorialize. Trust the image. Trust the action. Trust the reader."""
 
 prompt = st.text_area("Writing Prompt", value=prompt_default, height=150)
 
 # ── Analyze source texts when uploaded ──
 if source_file is not None:
     source_text_for_analysis = read_uploaded(source_file)
-    # Reset the file pointer so it can be read again later
     source_file.seek(0)
     if source_text_for_analysis.strip():
         profile = analyze_source_rhythm(source_text_for_analysis)
@@ -809,14 +909,27 @@ if "source_profile" not in st.session_state:
 def call_api(client, message_text, is_revision=False):
     """Makes an API call with the current settings."""
     
+    # Determine model for this call
     if is_revision and revision_model_choice != "Same as writing model":
         rev_model = model_map.get(revision_model_choice, model_id)
-        response = client.messages.create(
-            model=rev_model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            messages=[{"role": "user", "content": message_text}]
-        )
+        use_extended = (revision_model_choice == "Sonnet Extended Thinking")
+        
+        if use_extended:
+            budget = rev_thinking_budget if 'rev_thinking_budget' in dir() else 10000
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=max_tokens,
+                temperature=1.0,
+                thinking={"type": "enabled", "budget_tokens": budget},
+                messages=[{"role": "user", "content": message_text}]
+            )
+        else:
+            response = client.messages.create(
+                model=rev_model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                messages=[{"role": "user", "content": message_text}]
+            )
     elif model_choice == "Sonnet Extended Thinking" and not is_revision:
         response = client.messages.create(
             model=model_id,
@@ -845,7 +958,6 @@ def call_api(client, message_text, is_revision=False):
 
 
 def make_docx(text):
-    """Creates a Word document from text."""
     doc = Document()
     style = doc.styles['Normal']
     style.font.name = 'Georgia'
@@ -859,7 +971,7 @@ def make_docx(text):
 
 
 # ──────────────────────────────────────────────
-# WRITE BUTTON
+# WRITE BUTTON — THREE-PASS PIPELINE
 # ──────────────────────────────────────────────
 
 if st.button("Write Chapter", type="primary"):
@@ -886,7 +998,7 @@ if st.button("Write Chapter", type="primary"):
         token_est = char_count // 4
         st.info(f"Input: ~{char_count:,} characters (~{token_est:,} tokens)")
         
-        with st.spinner("Writing chapter..."):
+        with st.spinner("PASS 1: Writing chapter..."):
             try:
                 client = anthropic.Anthropic(api_key=api_key)
                 chapter_text, thinking_text = call_api(client, user_message)
@@ -896,34 +1008,33 @@ if st.button("Write Chapter", type="primary"):
                 else:
                     if thinking_text:
                         with st.expander("Model's thinking process"):
-                            st.text(thinking_text)
+                            st.text(thinking_text[:3000])
                     
-                    word_count = len(chapter_text.split())
-                    st.success(f"Chapter complete — {word_count:,} words")
+                    original_word_count = len(chapter_text.split())
+                    st.success(f"PASS 1 complete — {original_word_count:,} words")
                     
-                    # Store in session
+                    # Store
                     st.session_state.chapter_text = chapter_text
-                    st.session_state.revision_history = [{"pass": 0, "text": chapter_text, "label": "Original"}]
+                    st.session_state.revision_history = [{"pass": 0, "text": chapter_text, "label": "Original (Write)"}]
                     st.session_state.current_pass = 0
                     st.session_state.reports = []
                     
-                    # Score it
+                    # Score
                     score_result = score_chapter(chapter_text)
                     st.session_state.score_result = score_result
                     
-                    # Generate report
-                    report_buf = generate_report(score_result, chapter_text, "Original", 0, st.session_state.source_profile)
-                    st.session_state.reports.append({"label": "Original", "buffer": report_buf})
+                    # Report
+                    report_buf = generate_report(score_result, chapter_text, "Original (Write)", 0, st.session_state.source_profile)
+                    st.session_state.reports.append({"label": "Original (Write)", "buffer": report_buf})
                     
                     # Display
                     st.markdown("---")
+                    st.markdown("### PASS 1: Original")
                     display_scorecard(score_result, st.session_state.source_profile)
                     
-                    st.markdown("---")
-                    st.markdown("### Chapter Text")
-                    st.text(chapter_text)
+                    with st.expander("Original Chapter Text", expanded=False):
+                        st.text(chapter_text)
                     
-                    # Downloads
                     dcol1, dcol2 = st.columns(2)
                     with dcol1:
                         buffer = make_docx(chapter_text)
@@ -942,107 +1053,175 @@ if st.button("Write Chapter", type="primary"):
                             key="report_dl_orig"
                         )
                     
-                    # Auto-revise if enabled and score is not low risk
-                    if auto_revise and score_result["overall"] != "LOW RISK":
+                    current_text = chapter_text
+                    current_score = score_result
+                    
+                    # ── PASS 2: CUT ──
+                    if auto_pipeline and run_cut_pass and current_score["overall"] != "LOW RISK":
                         st.markdown("---")
-                        st.markdown("### Auto-Revision")
+                        st.markdown("### PASS 2: Cut")
                         
-                        current_text = chapter_text
-                        current_score = score_result
-                        
-                        for pass_num in range(1, max_revision_passes + 1):
-                            if current_score["overall"] == "LOW RISK":
-                                st.success(f"Reached LOW RISK after {pass_num - 1} revision(s). Stopping.")
-                                break
+                        if not current_score["flagged"]:
+                            st.info("No flagged passages. Skipping cut pass.")
+                        else:
+                            cutting_prompt = build_cutting_prompt(current_text, current_score)
                             
-                            if not current_score["flagged"]:
-                                st.info("No flagged passages to revise.")
-                                break
+                            with st.spinner("PASS 2: Cutting AI-detectable constructions..."):
+                                cut_text, cut_thinking = call_api(client, cutting_prompt, is_revision=True)
                             
-                            st.info(f"Revision pass {pass_num}/{max_revision_passes}...")
-                            
-                            revision_prompt = build_revision_prompt(current_text, current_score, st.session_state.source_profile)
-                            
-                            with st.spinner(f"Revision pass {pass_num}..."):
-                                revised_text, rev_thinking = call_api(client, revision_prompt, is_revision=True)
-                            
-                            if not revised_text.strip():
-                                st.warning(f"Pass {pass_num} returned empty. Stopping.")
-                                break
-                            
-                            # Score the revision
-                            new_score = score_chapter(revised_text)
-                            
-                            # Generate report
-                            rev_label = f"Revision {pass_num}"
-                            report_buf = generate_report(new_score, revised_text, rev_label, pass_num, st.session_state.source_profile)
-                            st.session_state.reports.append({"label": rev_label, "buffer": report_buf})
-                            
-                            # Store history
-                            st.session_state.revision_history.append({
-                                "pass": pass_num,
-                                "text": revised_text,
-                                "label": rev_label
-                            })
-                            
-                            # Display comparison
-                            st.markdown(f"#### Pass {pass_num} Results")
-                            prev_red = current_score["red_count"]
-                            new_red = new_score["red_count"]
-                            prev_flagged = len(current_score["flagged"])
-                            new_flagged = len(new_score["flagged"])
-                            
-                            rcol1, rcol2, rcol3 = st.columns(3)
-                            rcol1.metric("Red metrics", new_red, delta=f"{new_red - prev_red}", delta_color="inverse")
-                            rcol2.metric("Flagged sentences", new_flagged, delta=f"{new_flagged - prev_flagged}", delta_color="inverse")
-                            rcol3.metric("Overall", new_score["overall"])
-                            
-                            display_scorecard(new_score, st.session_state.source_profile)
-                            
-                            # Download buttons for this pass
-                            pcol1, pcol2 = st.columns(2)
-                            with pcol1:
-                                rev_buf = make_docx(revised_text)
-                                st.download_button(
-                                    label=f"Download {rev_label} (.docx)",
-                                    data=rev_buf,
-                                    file_name=f"chapter_revision_{pass_num}.docx",
-                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                    key=f"ch_dl_{pass_num}"
-                                )
-                            with pcol2:
-                                st.download_button(
-                                    label=f"Download {rev_label} Report (.docx)",
-                                    data=st.session_state.reports[-1]["buffer"],
-                                    file_name=f"report_revision_{pass_num}.docx",
-                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                    key=f"report_dl_{pass_num}"
-                                )
-                            
-                            current_text = revised_text
-                            current_score = new_score
-                            st.session_state.chapter_text = current_text
-                            st.session_state.score_result = current_score
-                        
-                        # Final download
+                            if not cut_text.strip():
+                                st.warning("Cut pass returned empty. Skipping.")
+                            else:
+                                if cut_thinking:
+                                    with st.expander("Cut pass thinking"):
+                                        st.text(cut_thinking[:3000])
+                                
+                                cut_word_count = len(cut_text.split())
+                                deficit = original_word_count - cut_word_count
+                                st.info(f"Cut pass: {original_word_count:,} → {cut_word_count:,} words ({deficit:,} words removed)")
+                                
+                                cut_score = score_chapter(cut_text)
+                                
+                                # Report
+                                cut_report = generate_report(cut_score, cut_text, "After Cut", 1, st.session_state.source_profile)
+                                st.session_state.reports.append({"label": "After Cut", "buffer": cut_report})
+                                st.session_state.revision_history.append({"pass": 1, "text": cut_text, "label": "After Cut"})
+                                
+                                # Comparison
+                                rcol1, rcol2, rcol3 = st.columns(3)
+                                rcol1.metric("Red metrics", cut_score["red_count"], 
+                                           delta=f"{cut_score['red_count'] - current_score['red_count']}", delta_color="inverse")
+                                rcol2.metric("Flagged sentences", len(cut_score["flagged"]), 
+                                           delta=f"{len(cut_score['flagged']) - len(current_score['flagged'])}", delta_color="inverse")
+                                rcol3.metric("Words removed", f"{deficit:,}")
+                                
+                                display_scorecard(cut_score, st.session_state.source_profile)
+                                
+                                with st.expander("Cut Chapter Text", expanded=False):
+                                    st.text(cut_text)
+                                
+                                pcol1, pcol2 = st.columns(2)
+                                with pcol1:
+                                    cut_buf = make_docx(cut_text)
+                                    st.download_button(
+                                        label="Download Cut Version (.docx)",
+                                        data=cut_buf,
+                                        file_name="chapter_after_cut.docx",
+                                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                        key="ch_dl_cut"
+                                    )
+                                with pcol2:
+                                    st.download_button(
+                                        label="Download Cut Report (.docx)",
+                                        data=st.session_state.reports[-1]["buffer"],
+                                        file_name="report_after_cut.docx",
+                                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                        key="report_dl_cut"
+                                    )
+                                
+                                current_text = cut_text
+                                current_score = cut_score
+                                
+                                # ── PASS 3: FILL ──
+                                if run_fill_pass and deficit > 100:
+                                    st.markdown("---")
+                                    st.markdown("### PASS 3: Fill")
+                                    
+                                    fill_prompt = build_fill_prompt(
+                                        current_text,
+                                        original_word_count,
+                                        prompt,
+                                        outline_text,
+                                        source_text,
+                                        char_text,
+                                        st.session_state.source_profile
+                                    )
+                                    
+                                    with st.spinner(f"PASS 3: Filling {deficit:,} words of new material..."):
+                                        fill_text, fill_thinking = call_api(client, fill_prompt, is_revision=True)
+                                    
+                                    if not fill_text.strip():
+                                        st.warning("Fill pass returned empty.")
+                                    else:
+                                        if fill_thinking:
+                                            with st.expander("Fill pass thinking"):
+                                                st.text(fill_thinking[:3000])
+                                        
+                                        fill_word_count = len(fill_text.split())
+                                        st.info(f"Fill pass: {cut_word_count:,} → {fill_word_count:,} words ({fill_word_count - cut_word_count:,} added)")
+                                        
+                                        fill_score = score_chapter(fill_text)
+                                        
+                                        # Report
+                                        fill_report = generate_report(fill_score, fill_text, "After Fill", 2, st.session_state.source_profile)
+                                        st.session_state.reports.append({"label": "After Fill", "buffer": fill_report})
+                                        st.session_state.revision_history.append({"pass": 2, "text": fill_text, "label": "After Fill"})
+                                        
+                                        # Comparison
+                                        rcol1, rcol2, rcol3 = st.columns(3)
+                                        rcol1.metric("Red metrics", fill_score["red_count"], 
+                                                   delta=f"{fill_score['red_count'] - cut_score['red_count']}", delta_color="inverse")
+                                        rcol2.metric("Flagged sentences", len(fill_score["flagged"]), 
+                                                   delta=f"{len(fill_score['flagged']) - len(cut_score['flagged'])}", delta_color="inverse")
+                                        rcol3.metric("Final words", f"{fill_word_count:,}")
+                                        
+                                        display_scorecard(fill_score, st.session_state.source_profile)
+                                        
+                                        with st.expander("Filled Chapter Text", expanded=False):
+                                            st.text(fill_text)
+                                        
+                                        fcol1, fcol2 = st.columns(2)
+                                        with fcol1:
+                                            fill_buf = make_docx(fill_text)
+                                            st.download_button(
+                                                label="Download Final (.docx)",
+                                                data=fill_buf,
+                                                file_name="chapter_final.docx",
+                                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                                key="ch_dl_fill"
+                                            )
+                                        with fcol2:
+                                            st.download_button(
+                                                label="Download Final Report (.docx)",
+                                                data=st.session_state.reports[-1]["buffer"],
+                                                file_name="report_final.docx",
+                                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                                key="report_dl_fill"
+                                            )
+                                        
+                                        current_text = fill_text
+                                        current_score = fill_score
+                                
+                                elif run_fill_pass and deficit <= 100:
+                                    st.info(f"Only {deficit} words removed — too few to justify a fill pass.")
+                    
+                    # Update final state
+                    st.session_state.chapter_text = current_text
+                    st.session_state.score_result = current_score
+                    
+                    # Final summary
+                    if len(st.session_state.revision_history) > 1:
                         st.markdown("---")
-                        st.markdown("### Final Revised Chapter")
-                        rev_word_count = len(current_text.split())
-                        st.success(f"Final version — {rev_word_count:,} words after {len(st.session_state.revision_history) - 1} revision(s)")
-                        st.text(current_text)
+                        st.markdown("### Pipeline Summary")
+                        orig_wc = original_word_count
+                        final_wc = len(current_text.split())
+                        orig_red = score_result["red_count"]
+                        final_red = current_score["red_count"]
+                        orig_flagged = len(score_result["flagged"])
+                        final_flagged = len(current_score["flagged"])
                         
-                        buffer = make_docx(current_text)
-                        st.download_button(
-                            label="Download Final Revised (.docx)",
-                            data=buffer,
-                            file_name="chapter_final_revised.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        )
+                        scol1, scol2, scol3, scol4 = st.columns(4)
+                        scol1.metric("Words", f"{final_wc:,}", delta=f"{final_wc - orig_wc:,}")
+                        scol2.metric("Red metrics", final_red, delta=f"{final_red - orig_red}", delta_color="inverse")
+                        scol3.metric("Flagged sentences", final_flagged, delta=f"{final_flagged - orig_flagged}", delta_color="inverse")
+                        scol4.metric("Overall", current_score["overall"])
             
             except anthropic.APIError as e:
                 st.error(f"API Error: {e}")
             except Exception as e:
                 st.error(f"Error: {e}")
+                import traceback
+                st.text(traceback.format_exc())
 
 
 # ──────────────────────────────────────────────
@@ -1062,7 +1241,6 @@ if st.button("Score This Text"):
         st.session_state.chapter_text = pasted_text
         st.session_state.score_result = score_result
         
-        # Generate and offer report download
         report_buf = generate_report(score_result, pasted_text, "Pasted Text", 0, st.session_state.source_profile)
         st.download_button(
             label="Download Score Report (.docx)",
@@ -1074,7 +1252,7 @@ if st.button("Score This Text"):
     else:
         st.warning("Paste some text first.")
 
-if st.button("Revise This Text"):
+if st.button("Cut This Text"):
     if not api_key:
         st.error("Enter your API key in the sidebar.")
     elif not pasted_text.strip():
@@ -1082,40 +1260,46 @@ if st.button("Revise This Text"):
     else:
         score_result = score_chapter(pasted_text)
         if not score_result["flagged"]:
-            st.info("No flagged passages to revise.")
+            st.info("No flagged passages to cut.")
         else:
             display_scorecard(score_result, st.session_state.source_profile)
-            revision_prompt = build_revision_prompt(pasted_text, score_result, st.session_state.source_profile)
+            cutting_prompt = build_cutting_prompt(pasted_text, score_result)
             
-            with st.spinner("Revising..."):
+            with st.spinner("Cutting..."):
                 try:
                     client = anthropic.Anthropic(api_key=api_key)
-                    revised_text, _ = call_api(client, revision_prompt, is_revision=True)
+                    cut_text, _ = call_api(client, cutting_prompt, is_revision=True)
                     
-                    if revised_text.strip():
-                        new_score = score_chapter(revised_text)
+                    if cut_text.strip():
+                        new_score = score_chapter(cut_text)
                         
-                        st.markdown("### Revised Version")
+                        orig_wc = len(pasted_text.split())
+                        cut_wc = len(cut_text.split())
+                        
+                        st.markdown("### Cut Version")
+                        st.info(f"{orig_wc:,} → {cut_wc:,} words ({orig_wc - cut_wc:,} removed)")
                         display_scorecard(new_score, st.session_state.source_profile)
-                        st.text(revised_text)
+                        
+                        with st.expander("Cut text", expanded=False):
+                            st.text(cut_text)
                         
                         rcol1, rcol2 = st.columns(2)
                         with rcol1:
-                            buffer = make_docx(revised_text)
+                            buffer = make_docx(cut_text)
                             st.download_button(
-                                label="Download Revised (.docx)",
+                                label="Download Cut Version (.docx)",
                                 data=buffer,
-                                file_name="chapter_revised.docx",
+                                file_name="chapter_cut.docx",
                                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                             )
                         with rcol2:
-                            report_buf = generate_report(new_score, revised_text, "Revised (Pasted)", 1, st.session_state.source_profile)
+                            report_buf = generate_report(new_score, cut_text, "Cut (Pasted)", 1, st.session_state.source_profile)
                             st.download_button(
-                                label="Download Revised Report (.docx)",
+                                label="Download Cut Report (.docx)",
                                 data=report_buf,
-                                file_name="report_revised.docx",
+                                file_name="report_cut.docx",
                                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                key="report_revised_pasted"
+                                key="report_cut_pasted"
                             )
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -1138,18 +1322,17 @@ if st.session_state.revision_history and len(st.session_state.revision_history) 
                 st.download_button(
                     label=f"Download {entry['label']}",
                     data=buffer,
-                    file_name=f"chapter_{entry['label'].lower().replace(' ', '_')}.docx",
+                    file_name=f"chapter_{entry['label'].lower().replace(' ', '_').replace('(', '').replace(')', '')}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     key=f"dl_{entry['pass']}"
                 )
             with dcol2:
-                # Find matching report
                 matching_reports = [r for r in st.session_state.reports if r["label"] == entry["label"]]
                 if matching_reports:
                     st.download_button(
                         label=f"Download {entry['label']} Report",
                         data=matching_reports[0]["buffer"],
-                        file_name=f"report_{entry['label'].lower().replace(' ', '_')}.docx",
+                        file_name=f"report_{entry['label'].lower().replace(' ', '_').replace('(', '').replace(')', '')}.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         key=f"rdl_{entry['pass']}"
                     )
