@@ -14,6 +14,166 @@ st.set_page_config(page_title="Fiction Writer + Detection Scorer", layout="wide"
 st.title("Fiction Chapter Writer")
 
 # ──────────────────────────────────────────────
+# SOURCE RHYTHM ANALYSIS
+# ──────────────────────────────────────────────
+
+def analyze_source_rhythm(text):
+    """
+    Analyzes source texts (Dare, Quinn, Faulks, etc.) to extract a
+    sentence rhythm fingerprint. This becomes the target for revision,
+    not an abstract threshold.
+    
+    Returns a dict with the source's actual sentence length profile.
+    """
+    if not text or not text.strip():
+        return None
+    
+    # Split into sentences
+    sentence_endings = re.split(r'(?<=[.!?])\s+(?=[A-Z"\u201C])', text)
+    sentences = [s.strip() for s in sentence_endings if s.strip()]
+    lengths = [len(s.split()) for s in sentences]
+    
+    if len(lengths) < 10:
+        return None  # not enough data
+    
+    total = len(lengths)
+    mean_len = sum(lengths) / total
+    variance = sum((x - mean_len) ** 2 for x in lengths) / total
+    std_dev = math.sqrt(variance)
+    cv = std_dev / mean_len if mean_len > 0 else 0
+    
+    # Distribution buckets
+    ultra_short = sum(1 for l in lengths if l <= 5)       # "He sat." / "She went."
+    short = sum(1 for l in lengths if 6 <= l <= 12)       # Simple declaratives
+    medium = sum(1 for l in lengths if 13 <= l <= 25)     # Standard prose
+    long = sum(1 for l in lengths if 26 <= l <= 40)       # Complex sentences
+    very_long = sum(1 for l in lengths if l > 40)         # Accumulating clauses
+    
+    # Transition patterns: what follows what
+    short_after_long = 0   # <=5 words after >=25 words (jagged rhythm)
+    long_after_short = 0   # >=25 words after <=5 words
+    same_band = 0          # consecutive sentences in same length band
+    
+    for i in range(1, len(lengths)):
+        prev, curr = lengths[i-1], lengths[i]
+        if prev >= 25 and curr <= 5:
+            short_after_long += 1
+        if prev <= 5 and curr >= 25:
+            long_after_short += 1
+        # Same band check (both ultra-short, both medium, etc.)
+        prev_band = 0 if prev <= 5 else (1 if prev <= 12 else (2 if prev <= 25 else 3))
+        curr_band = 0 if curr <= 5 else (1 if curr <= 12 else (2 if curr <= 25 else 3))
+        if prev_band == curr_band:
+            same_band += 1
+    
+    transitions = total - 1 if total > 1 else 1
+    
+    # Paratactic accumulation: sentences with 3+ "and" 
+    paratactic = sum(1 for s in sentences if s.count(' and ') >= 3)
+    
+    # Longest and shortest
+    max_len = max(lengths)
+    min_len = min(lengths)
+    
+    # Range ratio (max / min) — higher = more variation
+    range_ratio = max_len / min_len if min_len > 0 else max_len
+    
+    return {
+        "total_sentences": total,
+        "word_count": sum(lengths),
+        "mean_length": round(mean_len, 1),
+        "cv": round(cv, 3),
+        "std_dev": round(std_dev, 1),
+        "min_length": min_len,
+        "max_length": max_len,
+        "range_ratio": round(range_ratio, 1),
+        "distribution": {
+            "ultra_short_pct": round(100 * ultra_short / total, 1),  # <=5 words
+            "short_pct": round(100 * short / total, 1),              # 6-12
+            "medium_pct": round(100 * medium / total, 1),            # 13-25
+            "long_pct": round(100 * long / total, 1),                # 26-40
+            "very_long_pct": round(100 * very_long / total, 1),      # >40
+        },
+        "transitions": {
+            "short_after_long_pct": round(100 * short_after_long / transitions, 1),
+            "long_after_short_pct": round(100 * long_after_short / transitions, 1),
+            "same_band_pct": round(100 * same_band / transitions, 1),
+        },
+        "paratactic_pct": round(100 * paratactic / total, 1),
+    }
+
+
+def display_source_profile(profile):
+    """Renders the source rhythm profile in Streamlit."""
+    st.markdown("### Source Text Rhythm Profile")
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Sentence CV", profile["cv"], help="Target for chapter rhythm")
+    col2.metric("Mean length", f"{profile['mean_length']} words")
+    col3.metric("Range", f"{profile['min_length']}–{profile['max_length']} words")
+    
+    col4, col5, col6 = st.columns(3)
+    col4.metric("Short after long", f"{profile['transitions']['short_after_long_pct']}%",
+                help="% of times a ≤5-word sentence follows a ≥25-word sentence")
+    col5.metric("Same-band consecutive", f"{profile['transitions']['same_band_pct']}%",
+                help="Lower = more variation")
+    col6.metric("Paratactic (3+ 'and')", f"{profile['paratactic_pct']}%")
+    
+    d = profile["distribution"]
+    st.caption(f"Distribution: ≤5w: {d['ultra_short_pct']}% | 6-12w: {d['short_pct']}% | "
+               f"13-25w: {d['medium_pct']}% | 26-40w: {d['long_pct']}% | >40w: {d['very_long_pct']}%")
+
+
+def build_rhythm_instructions(source_profile, chapter_profile):
+    """
+    Compares the chapter's rhythm to the source's rhythm and generates
+    specific revision instructions for sentence length variation.
+    """
+    if source_profile is None:
+        return ""
+    
+    instructions = []
+    
+    src_cv = source_profile["cv"]
+    ch_cv = chapter_profile
+    
+    if ch_cv < src_cv - 0.1:
+        gap = round(src_cv - ch_cv, 2)
+        instructions.append(
+            f"SENTENCE RHYTHM: The source authors have a sentence length CV of {src_cv}. "
+            f"This chapter is at {ch_cv} — {gap} points too uniform. To fix this:"
+        )
+        
+        src_d = source_profile["distribution"]
+        instructions.append(
+            f"- Source distribution: {src_d['ultra_short_pct']}% ultra-short (≤5 words), "
+            f"{src_d['very_long_pct']}% very long (>40 words). "
+            f"The chapter needs MORE of both extremes — more 2-4 word sentences AND more 35-50 word accumulating sentences."
+        )
+        
+        src_t = source_profile["transitions"]
+        if src_t["short_after_long_pct"] > 5:
+            instructions.append(
+                f"- In the source texts, {src_t['short_after_long_pct']}% of sentences ≤5 words follow sentences ≥25 words. "
+                f"After a long descriptive sentence, follow it with something brutally short: 'She went.' / 'I knew.' / 'Small mercies.'"
+            )
+        
+        if source_profile["paratactic_pct"] > 2:
+            instructions.append(
+                f"- The source texts use paratactic accumulation (3+ 'and' in a sentence) {source_profile['paratactic_pct']}% of the time. "
+                f"Occasionally fuse two medium sentences into one long one using 'and...and...and' rhythm: "
+                f"'the gate open and the yard swept and everything that needed doing, done.'"
+            )
+        
+        instructions.append(
+            "- Do NOT just break long sentences into medium ones — that makes CV worse. "
+            "Add ultra-short sentences (2-5 words) after long passages AND let some sentences run long with accumulating clauses."
+        )
+    
+    return "\n".join(instructions)
+
+
+# ──────────────────────────────────────────────
 # DETECTION SCORING ENGINE
 # ──────────────────────────────────────────────
 
@@ -258,7 +418,7 @@ def score_chapter(text):
     }
 
 
-def build_revision_prompt(chapter_text, score_result):
+def build_revision_prompt(chapter_text, score_result, source_profile=None):
     """
     Builds a targeted revision prompt that identifies specific flagged
     passages and tells the model how to fix them without destroying
@@ -277,7 +437,7 @@ def build_revision_prompt(chapter_text, score_result):
         "metacognitive": "Contains metacognitive verb (noted/filed/registered/understood). Show through action, don't narrate the cognitive process.",
         "fact_that": "Contains 'the fact that' — analytical abstraction. Remove the frame; state the fact directly.",
         "negation_leading": "Negation-leading construction — defines by what something is not. Replace with a direct assertion of what it is.",
-        "long_compound": "Long compound sentence with many commas — may read as inventory or process narration. Consider breaking into shorter sentences.",
+        "long_compound": "Long compound sentence with many commas — may read as inventory or process narration. Consider breaking into shorter sentences OR following with a brutally short sentence (2-5 words).",
         "obs_interp_coupling": "Observation-interpretation coupling — concrete detail and interpretive gloss fused in one sentence. Separate them or cut the interpretation.",
         "constructed_simile": "Constructed simile or metaphor — literary comparison that reads as crafted rather than natural. Replace with a flat statement, an idiom, or cut entirely. Only colloquial/idiomatic figures of speech pass detection."
     }
@@ -294,6 +454,10 @@ def build_revision_prompt(chapter_text, score_result):
         elif data["level"] == "YELLOW":
             metric_warnings += f"\n- {name}: {data['value']} {data['unit']} — YELLOW (moderate risk)"
     
+    # Build rhythm instructions from source profile
+    chapter_cv = metrics.get("Sentence length CV", {}).get("value", 0)
+    rhythm_block = build_rhythm_instructions(source_profile, chapter_cv)
+    
     prompt = f"""You are revising a chapter of fiction to reduce AI detection risk while preserving the voice, content, and literary quality.
 
 IMPORTANT RULES:
@@ -306,8 +470,8 @@ IMPORTANT RULES:
 - When replacing an em dash gloss, don't just move the gloss to a new sentence — consider cutting it entirely if the image works without it.
 - When cutting "as though" or "the way" constructions, let the physical action stand alone. Trust the reader.
 - ELIMINATE all constructed similes and metaphors. Replace "as though [interpretation]", "the way [pronoun] [verb]s when...", "like a [noun] that...", "with the air of a...", "the kind of [noun] who..." with either: (a) a flat direct statement, (b) an idiomatic/colloquial phrase, or (c) nothing — just cut it. The only figurative language that passes detection is dead metaphors and idioms that a person would say without thinking ("a rag that had seen worse" = good; "as though hurrying would remind his body how long it had been" = bad).
-- Break long compound sentences into shorter ones using periods.
 - Do NOT introduce new em dashes, "as though" constructions, similes, metaphors, or metacognitive verbs.
+{rhythm_block}
 
 CHAPTER METRICS (current scores):
 {metric_warnings}
@@ -324,10 +488,10 @@ Here is the complete chapter. Revise ONLY the flagged passages. Output the full 
     return prompt
 
 
-def generate_report(score_result, chapter_text, label, pass_num):
+def generate_report(score_result, chapter_text, label, pass_num, source_profile=None):
     """
     Generates a Word document report for a scoring pass.
-    Contains: summary, metrics table, flagged passages with context.
+    Contains: summary, metrics table, rhythm comparison, flagged passages with context.
     """
     doc = Document()
     style = doc.styles['Normal']
@@ -403,6 +567,47 @@ def generate_report(score_result, chapter_text, label, pass_num):
         f"Constructed similes: {summary['simile_total']}"
     )
     
+    # Source rhythm comparison
+    if source_profile:
+        doc.add_heading('Sentence Rhythm — Source Comparison', level=2)
+        ch_cv = score_result["metrics"].get("Sentence length CV", {}).get("value", 0)
+        src_cv = source_profile["cv"]
+        src_d = source_profile["distribution"]
+        src_t = source_profile["transitions"]
+        
+        rtable = doc.add_table(rows=1, cols=3)
+        rtable.style = 'Light Grid Accent 1'
+        rhdr = rtable.rows[0].cells
+        rhdr[0].text = 'Measure'
+        rhdr[1].text = 'Source'
+        rhdr[2].text = 'Chapter'
+        
+        rhythm_rows = [
+            ("Sentence CV", str(src_cv), str(ch_cv)),
+            ("Mean sentence length", f"{source_profile['mean_length']}w", f"{summary['mean_sentence_length']}w"),
+            ("Range (min–max)", f"{source_profile['min_length']}–{source_profile['max_length']}w", "—"),
+            ("Ultra-short (≤5w)", f"{src_d['ultra_short_pct']}%", "—"),
+            ("Short (6-12w)", f"{src_d['short_pct']}%", "—"),
+            ("Medium (13-25w)", f"{src_d['medium_pct']}%", "—"),
+            ("Long (26-40w)", f"{src_d['long_pct']}%", "—"),
+            ("Very long (>40w)", f"{src_d['very_long_pct']}%", "—"),
+            ("Short-after-long transitions", f"{src_t['short_after_long_pct']}%", "—"),
+            ("Same-band consecutive", f"{src_t['same_band_pct']}%", "—"),
+            ("Paratactic (3+ 'and')", f"{source_profile['paratactic_pct']}%", "—"),
+        ]
+        for measure, src_val, ch_val in rhythm_rows:
+            row = rtable.add_row().cells
+            row[0].text = measure
+            row[1].text = src_val
+            row[2].text = ch_val
+        
+        gap = round(src_cv - ch_cv, 3)
+        if gap > 0.1:
+            p_rhythm = doc.add_paragraph()
+            r = p_rhythm.add_run(f"Rhythm gap: {gap} — chapter is too uniform compared to source texts.")
+            r.font.color.rgb = RGBColor(200, 150, 0)
+            r.bold = True
+    
     # Flagged passages
     flagged = score_result["flagged"]
     if flagged:
@@ -434,7 +639,7 @@ def generate_report(score_result, chapter_text, label, pass_num):
     return buffer
 
 
-def display_scorecard(score_result):
+def display_scorecard(score_result, source_profile=None):
     """Renders the scorecard in Streamlit."""
     
     st.markdown("### Detection Risk Scorecard")
@@ -465,6 +670,25 @@ def display_scorecard(score_result):
     st.caption(f"{s['total_sentences']} sentences | Mean length: {s['mean_sentence_length']} words | "
                f"{s['flagged_sentences']} flagged ({round(100*s['flagged_sentences']/max(s['total_sentences'],1))}%) | "
                f"Dialogue: {s['dialogue_word_pct']}% | Similes: {s['simile_total']}")
+    
+    # Source rhythm comparison
+    if source_profile:
+        ch_cv = score_result["metrics"].get("Sentence length CV", {}).get("value", 0)
+        src_cv = source_profile["cv"]
+        src_d = source_profile["distribution"]
+        gap = round(src_cv - ch_cv, 3)
+        
+        if gap > 0.1:
+            st.warning(
+                f"**Rhythm gap:** Chapter CV {ch_cv} vs Source CV {src_cv} (gap: {gap}). "
+                f"Source has {src_d['ultra_short_pct']}% ultra-short sentences (≤5w) and "
+                f"{src_d['very_long_pct']}% very long (>40w). "
+                f"Short-after-long transitions: {source_profile['transitions']['short_after_long_pct']}%."
+            )
+        elif gap > 0:
+            st.info(f"Rhythm close to source: Chapter CV {ch_cv} vs Source CV {src_cv}.")
+        else:
+            st.success(f"Rhythm matches or exceeds source: Chapter CV {ch_cv} vs Source CV {src_cv}.")
     
     flagged = score_result["flagged"]
     if flagged:
@@ -548,6 +772,22 @@ prompt_default = """Using the source texts, character profiles, and chapter outl
 
 prompt = st.text_area("Writing Prompt", value=prompt_default, height=150)
 
+# ── Analyze source texts when uploaded ──
+if source_file is not None:
+    source_text_for_analysis = read_uploaded(source_file)
+    # Reset the file pointer so it can be read again later
+    source_file.seek(0)
+    if source_text_for_analysis.strip():
+        profile = analyze_source_rhythm(source_text_for_analysis)
+        if profile:
+            st.session_state.source_profile = profile
+            with st.expander("Source Rhythm Profile", expanded=False):
+                display_source_profile(profile)
+        else:
+            st.caption("Source text too short for rhythm analysis (need 10+ sentences).")
+else:
+    st.session_state.source_profile = None
+
 # ──────────────────────────────────────────────
 # SESSION STATE
 # ──────────────────────────────────────────────
@@ -562,6 +802,8 @@ if "current_pass" not in st.session_state:
     st.session_state.current_pass = 0
 if "reports" not in st.session_state:
     st.session_state.reports = []
+if "source_profile" not in st.session_state:
+    st.session_state.source_profile = None
 
 
 def call_api(client, message_text, is_revision=False):
@@ -670,12 +912,12 @@ if st.button("Write Chapter", type="primary"):
                     st.session_state.score_result = score_result
                     
                     # Generate report
-                    report_buf = generate_report(score_result, chapter_text, "Original", 0)
+                    report_buf = generate_report(score_result, chapter_text, "Original", 0, st.session_state.source_profile)
                     st.session_state.reports.append({"label": "Original", "buffer": report_buf})
                     
                     # Display
                     st.markdown("---")
-                    display_scorecard(score_result)
+                    display_scorecard(score_result, st.session_state.source_profile)
                     
                     st.markdown("---")
                     st.markdown("### Chapter Text")
@@ -719,7 +961,7 @@ if st.button("Write Chapter", type="primary"):
                             
                             st.info(f"Revision pass {pass_num}/{max_revision_passes}...")
                             
-                            revision_prompt = build_revision_prompt(current_text, current_score)
+                            revision_prompt = build_revision_prompt(current_text, current_score, st.session_state.source_profile)
                             
                             with st.spinner(f"Revision pass {pass_num}..."):
                                 revised_text, rev_thinking = call_api(client, revision_prompt, is_revision=True)
@@ -733,7 +975,7 @@ if st.button("Write Chapter", type="primary"):
                             
                             # Generate report
                             rev_label = f"Revision {pass_num}"
-                            report_buf = generate_report(new_score, revised_text, rev_label, pass_num)
+                            report_buf = generate_report(new_score, revised_text, rev_label, pass_num, st.session_state.source_profile)
                             st.session_state.reports.append({"label": rev_label, "buffer": report_buf})
                             
                             # Store history
@@ -755,7 +997,7 @@ if st.button("Write Chapter", type="primary"):
                             rcol2.metric("Flagged sentences", new_flagged, delta=f"{new_flagged - prev_flagged}", delta_color="inverse")
                             rcol3.metric("Overall", new_score["overall"])
                             
-                            display_scorecard(new_score)
+                            display_scorecard(new_score, st.session_state.source_profile)
                             
                             # Download buttons for this pass
                             pcol1, pcol2 = st.columns(2)
@@ -816,12 +1058,12 @@ pasted_text = st.text_area("Paste chapter text", height=200, key="paste_score")
 if st.button("Score This Text"):
     if pasted_text.strip():
         score_result = score_chapter(pasted_text)
-        display_scorecard(score_result)
+        display_scorecard(score_result, st.session_state.source_profile)
         st.session_state.chapter_text = pasted_text
         st.session_state.score_result = score_result
         
         # Generate and offer report download
-        report_buf = generate_report(score_result, pasted_text, "Pasted Text", 0)
+        report_buf = generate_report(score_result, pasted_text, "Pasted Text", 0, st.session_state.source_profile)
         st.download_button(
             label="Download Score Report (.docx)",
             data=report_buf,
@@ -842,8 +1084,8 @@ if st.button("Revise This Text"):
         if not score_result["flagged"]:
             st.info("No flagged passages to revise.")
         else:
-            display_scorecard(score_result)
-            revision_prompt = build_revision_prompt(pasted_text, score_result)
+            display_scorecard(score_result, st.session_state.source_profile)
+            revision_prompt = build_revision_prompt(pasted_text, score_result, st.session_state.source_profile)
             
             with st.spinner("Revising..."):
                 try:
@@ -854,7 +1096,7 @@ if st.button("Revise This Text"):
                         new_score = score_chapter(revised_text)
                         
                         st.markdown("### Revised Version")
-                        display_scorecard(new_score)
+                        display_scorecard(new_score, st.session_state.source_profile)
                         st.text(revised_text)
                         
                         rcol1, rcol2 = st.columns(2)
@@ -867,7 +1109,7 @@ if st.button("Revise This Text"):
                                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                             )
                         with rcol2:
-                            report_buf = generate_report(new_score, revised_text, "Revised (Pasted)", 1)
+                            report_buf = generate_report(new_score, revised_text, "Revised (Pasted)", 1, st.session_state.source_profile)
                             st.download_button(
                                 label="Download Revised Report (.docx)",
                                 data=report_buf,
