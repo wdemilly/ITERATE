@@ -1,11 +1,14 @@
 import streamlit as st
 import anthropic
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Pt, RGBColor, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 import io
 import re
 import math
 import json
+import os
+from datetime import datetime
 
 st.set_page_config(page_title="Fiction Writer + Detection Scorer", layout="wide")
 st.title("Fiction Chapter Writer")
@@ -16,7 +19,7 @@ st.title("Fiction Chapter Writer")
 
 def score_chapter(text):
     """
-    Scores a chapter against 10 detection metrics derived from
+    Scores a chapter against 11 detection metrics derived from
     reverse-engineering Originality.ai's Lite 1.0.2 detector across
     1,925 segments (54,721 words) and 17 separate documents.
     
@@ -31,7 +34,6 @@ def score_chapter(text):
     kw = word_count / 1000  # per-thousand-word normalizer
     
     # ── Split into sentences ──
-    # Handle dialogue quotes, abbreviations, etc.
     sentence_endings = re.split(r'(?<=[.!?])\s+(?=[A-Z"\u201C])', text)
     sentences = [s.strip() for s in sentence_endings if s.strip()]
     sentence_lengths = [len(s.split()) for s in sentences]
@@ -65,7 +67,6 @@ def score_chapter(text):
     period_comma_ratio = periods / commas if commas > 0 else periods
     
     # ── 6. Dialogue density ──
-    # Count words inside quotation marks (smart and straight)
     dialogue_matches = re.findall(r'[\u201C"][^"\u201D]*[\u201D"]', text)
     dialogue_words = sum(len(m.split()) for m in dialogue_matches)
     dialogue_pct = (dialogue_words / word_count * 100) if word_count > 0 else 0
@@ -94,11 +95,41 @@ def score_chapter(text):
     of_person_who = len(re.findall(r'\bof a (?:man|woman|person|people) who\b', text, re.I))
     of_person_rate = of_person_who / kw if kw > 0 else 0
     
+    # ── 11. Constructed similes and metaphors ──
+    # Catches: "as though", "as if", "the way [pronoun]", "like a [noun] that/who/which",
+    # "the kind of [noun] that", "[verb]ed the way", "as a [noun] [verb]s",
+    # and extended metaphor constructions.
+    # Does NOT catch dead metaphors or idioms (those are too varied to regex).
+    simile_patterns = [
+        r'\bas though\b',
+        r'\bas if\b',
+        r'\bthe way (?:he|she|they|I|it|men|women|people|a man|a woman|soldiers|hungry)\b',
+        r'\blike a [a-z]+ (?:that|who|which)\b',
+        r'\blike a [a-z]+ [a-z]+ing\b',           # "like a man carrying..."
+        r'\bthe kind of [a-z]+ (?:that|who|which|you)\b',  # "the kind of man who..."
+        r'\bthe sort of [a-z]+ (?:that|who|which|you)\b',
+        r'\b[a-z]+ed the way [a-z]+\b',            # "moved the way soldiers..."
+        r'\bas a [a-z]+ (?:does|would|might|could|who)\b',  # "as a man does", "as a man who"
+        r'\bthe particular [a-z]+ (?:of|that)\b',  # "the particular quality of"
+        r'\bwith the [a-z]+ of a\b',               # "with the patience of a"
+        r'\bhad the [a-z]+ of a\b',                # "had the eyes of a"
+        r'\bin the manner of\b',
+        r'\bwith the air of\b',
+    ]
+    simile_count = 0
+    simile_matches_all = []
+    for pat in simile_patterns:
+        found = re.findall(pat, text, re.I)
+        simile_count += len(found)
+        simile_matches_all.extend(found)
+    # Deduplicate: "as though" and "as if" are already counted in metric 2,
+    # but we want the combined simile count for the new metric
+    simile_rate = simile_count / kw if kw > 0 else 0
+    
     # ── Scoring: each metric gets GREEN / YELLOW / RED ──
     metrics = {}
     
     def rate(name, value, green_thresh, yellow_thresh, unit, invert=False):
-        """Rate a metric. invert=True means higher is better (e.g., dialogue density)."""
         if invert:
             if value >= green_thresh:
                 level = "GREEN"
@@ -125,6 +156,7 @@ def score_chapter(text):
     rate("Metacognitive verb density", meta_rate, 0.3, 1.0, "/1000w")
     rate("Analytical frames", analytical_rate, 0.0, 0.2, "/1000w")
     rate("'Of a person who' density", of_person_rate, 0.0, 0.3, "/1000w")
+    rate("Constructed simile density", simile_rate, 1.0, 3.0, "/1000w")
     
     # ── Flag specific high-risk passages ──
     flagged = []
@@ -132,44 +164,54 @@ def score_chapter(text):
     for i, sent in enumerate(sentences):
         risks = []
         
-        # Em dash with interpretation after it
         if '\u2014' in sent or '--' in sent:
             risks.append("em_dash")
         
-        # "As though" / "as if"
         if re.search(r'\bas though\b|\bas if\b', sent, re.I):
             risks.append("as_though")
         
-        # "The way" characterization
         if re.search(r'\bthe way (?:he|she|they|I|it|men|women|people|a man|a woman|soldiers|hungry)\b', sent, re.I):
             risks.append("the_way")
         
-        # "Of a man/woman who"
         if re.search(r'\bof a (?:man|woman|person) who\b', sent, re.I):
             risks.append("of_person_who")
         
-        # Metacognitive verbs
         if re.search(r'\b(?:I\s+)?(?:noted|filed|registered|understood|recognised|recognized)\b', sent, re.I):
             risks.append("metacognitive")
         
-        # "The fact that"
         if re.search(r'\bthe fact that\b', sent, re.I):
             risks.append("fact_that")
         
-        # Negation-as-framing (not X but Y or negation-leading)
         if re.search(r'^(?:It|That|This|I|She|He) (?:was|did|had|could) not\b', sent):
             risks.append("negation_leading")
         
-        # Long sentence with multiple commas (potential inventory/run-on)
         comma_count = sent.count(',')
         sent_words = len(sent.split())
         if comma_count >= 4 and sent_words >= 35:
             risks.append("long_compound")
         
-        # Observation-interpretation in same sentence (concrete detail + em dash + interpretation)
         if ('\u2014' in sent or '--' in sent) and sent_words > 25:
             if re.search(r'\bas though\b|\bthe way\b|\bwhich (?:was|meant|told)\b', sent, re.I):
                 risks.append("obs_interp_coupling")
+        
+        # Constructed simile detection at sentence level
+        simile_sentence_patterns = [
+            r'\blike a [a-z]+ (?:that|who|which)\b',
+            r'\blike a [a-z]+ [a-z]+ing\b',
+            r'\bthe kind of [a-z]+ (?:that|who|which|you)\b',
+            r'\bthe sort of [a-z]+ (?:that|who|which|you)\b',
+            r'\b[a-z]+ed the way [a-z]+\b',
+            r'\bas a [a-z]+ (?:does|would|might|could|who)\b',
+            r'\bwith the [a-z]+ of a\b',
+            r'\bhad the [a-z]+ of a\b',
+            r'\bin the manner of\b',
+            r'\bwith the air of\b',
+            r'\bthe particular [a-z]+ (?:of|that)\b',
+        ]
+        for sp in simile_sentence_patterns:
+            if re.search(sp, sent, re.I):
+                risks.append("constructed_simile")
+                break
         
         if risks:
             flagged.append({
@@ -207,6 +249,7 @@ def score_chapter(text):
             "as_though_total": as_though_count + as_if_count,
             "the_way_total": the_way_count,
             "negation_total": negation_count,
+            "simile_total": simile_count,
             "dialogue_word_pct": round(dialogue_pct, 1),
             "mean_sentence_length": round(mean_len, 1),
             "flagged_sentences": len(flagged),
@@ -224,20 +267,19 @@ def build_revision_prompt(chapter_text, score_result):
     flagged = score_result["flagged"]
     metrics = score_result["metrics"]
     
-    # Only include top flagged passages (limit to 15 most severe)
     top_flagged = flagged[:15]
     
-    # Build the risk descriptions
     risk_descriptions = {
         "em_dash": "Contains em dash — often used for interpretive gloss. Replace with a period and a new sentence, or remove the gloss entirely.",
-        "as_though": "Contains 'as though' or 'as if' — appends speculative interpretation to concrete observation. Cut the tag. Let the action stand alone.",
+        "as_though": "Contains 'as though' or 'as if' — appends speculative interpretation to concrete observation. Cut the simile. Let the action stand alone.",
         "the_way": "Contains 'the way he/she/they' — embeds interpretation inside description. Replace with direct physical observation.",
         "of_person_who": "Contains 'of a man/woman who' — analytical characterization. Replace with action or a short direct statement.",
         "metacognitive": "Contains metacognitive verb (noted/filed/registered/understood). Show through action, don't narrate the cognitive process.",
         "fact_that": "Contains 'the fact that' — analytical abstraction. Remove the frame; state the fact directly.",
         "negation_leading": "Negation-leading construction — defines by what something is not. Replace with a direct assertion of what it is.",
         "long_compound": "Long compound sentence with many commas — may read as inventory or process narration. Consider breaking into shorter sentences.",
-        "obs_interp_coupling": "Observation-interpretation coupling — concrete detail and interpretive gloss fused in one sentence. Separate them or cut the interpretation."
+        "obs_interp_coupling": "Observation-interpretation coupling — concrete detail and interpretive gloss fused in one sentence. Separate them or cut the interpretation.",
+        "constructed_simile": "Constructed simile or metaphor — literary comparison that reads as crafted rather than natural. Replace with a flat statement, an idiom, or cut entirely. Only colloquial/idiomatic figures of speech pass detection."
     }
     
     passage_list = ""
@@ -245,7 +287,6 @@ def build_revision_prompt(chapter_text, score_result):
         risks_text = "; ".join(risk_descriptions.get(r, r) for r in item["risks"])
         passage_list += f"\n\nFLAGGED PASSAGE {i+1}:\n\"{item['sentence'][:300]}\"\nISSUES: {risks_text}"
     
-    # Build metric warnings
     metric_warnings = ""
     for name, data in metrics.items():
         if data["level"] == "RED":
@@ -264,8 +305,9 @@ IMPORTANT RULES:
 - Prefer colloquial, idiomatic, tossed-off phrasing over composed literary images.
 - When replacing an em dash gloss, don't just move the gloss to a new sentence — consider cutting it entirely if the image works without it.
 - When cutting "as though" or "the way" constructions, let the physical action stand alone. Trust the reader.
+- ELIMINATE all constructed similes and metaphors. Replace "as though [interpretation]", "the way [pronoun] [verb]s when...", "like a [noun] that...", "with the air of a...", "the kind of [noun] who..." with either: (a) a flat direct statement, (b) an idiomatic/colloquial phrase, or (c) nothing — just cut it. The only figurative language that passes detection is dead metaphors and idioms that a person would say without thinking ("a rag that had seen worse" = good; "as though hurrying would remind his body how long it had been" = bad).
 - Break long compound sentences into shorter ones using periods.
-- Do NOT introduce new em dashes, "as though" constructions, or metacognitive verbs.
+- Do NOT introduce new em dashes, "as though" constructions, similes, metaphors, or metacognitive verbs.
 
 CHAPTER METRICS (current scores):
 {metric_warnings}
@@ -282,6 +324,116 @@ Here is the complete chapter. Revise ONLY the flagged passages. Output the full 
     return prompt
 
 
+def generate_report(score_result, chapter_text, label, pass_num):
+    """
+    Generates a Word document report for a scoring pass.
+    Contains: summary, metrics table, flagged passages with context.
+    """
+    doc = Document()
+    style = doc.styles['Normal']
+    style.font.name = 'Calibri'
+    style.font.size = Pt(11)
+    
+    # Title
+    title = doc.add_heading(f'Detection Score Report — {label}', level=1)
+    
+    # Summary paragraph
+    summary = score_result["summary"]
+    overall = score_result["overall"]
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    
+    p = doc.add_paragraph()
+    p.add_run(f"Generated: {timestamp}\n").bold = False
+    p.add_run(f"Words: {score_result['word_count']:,} | "
+              f"Sentences: {summary['total_sentences']} | "
+              f"Mean sentence length: {summary['mean_sentence_length']} words\n")
+    p.add_run(f"Dialogue: {summary['dialogue_word_pct']}% of words | "
+              f"Flagged sentences: {summary['flagged_sentences']} of {summary['total_sentences']} "
+              f"({round(100*summary['flagged_sentences']/max(summary['total_sentences'],1))}%)\n")
+    
+    # Overall risk
+    p2 = doc.add_paragraph()
+    risk_run = p2.add_run(f"OVERALL: {overall}")
+    risk_run.bold = True
+    risk_run.font.size = Pt(14)
+    if overall == "HIGH RISK":
+        risk_run.font.color.rgb = RGBColor(200, 0, 0)
+    elif overall == "MODERATE RISK":
+        risk_run.font.color.rgb = RGBColor(200, 150, 0)
+    else:
+        risk_run.font.color.rgb = RGBColor(0, 150, 0)
+    
+    p2.add_run(f"  ({score_result['red_count']} RED, {score_result['yellow_count']} YELLOW, {score_result['green_count']} GREEN)")
+    
+    # Metrics table
+    doc.add_heading('Metrics', level=2)
+    
+    table = doc.add_table(rows=1, cols=4)
+    table.style = 'Light Grid Accent 1'
+    hdr = table.rows[0].cells
+    hdr[0].text = 'Metric'
+    hdr[1].text = 'Value'
+    hdr[2].text = 'Unit'
+    hdr[3].text = 'Status'
+    
+    for name, data in score_result["metrics"].items():
+        row = table.add_row().cells
+        row[0].text = name
+        row[1].text = str(data["value"])
+        row[2].text = data["unit"]
+        row[3].text = data["level"]
+        # Color the status cell
+        for paragraph in row[3].paragraphs:
+            for run in paragraph.runs:
+                if data["level"] == "RED":
+                    run.font.color.rgb = RGBColor(200, 0, 0)
+                    run.bold = True
+                elif data["level"] == "YELLOW":
+                    run.font.color.rgb = RGBColor(200, 150, 0)
+                    run.bold = True
+                else:
+                    run.font.color.rgb = RGBColor(0, 130, 0)
+    
+    # Counts summary
+    doc.add_paragraph(
+        f"Em dashes: {summary['em_dashes']} | "
+        f"'As though/if': {summary['as_though_total']} | "
+        f"'The way': {summary['the_way_total']} | "
+        f"Negation-leading: {summary['negation_total']} | "
+        f"Constructed similes: {summary['simile_total']}"
+    )
+    
+    # Flagged passages
+    flagged = score_result["flagged"]
+    if flagged:
+        doc.add_heading(f'Flagged Passages ({len(flagged)})', level=2)
+        
+        for item in flagged[:25]:
+            p = doc.add_paragraph()
+            tag_run = p.add_run(f"[{item['risk_count']} flags: {', '.join(item['risks'])}]")
+            tag_run.bold = True
+            tag_run.font.size = Pt(9)
+            tag_run.font.color.rgb = RGBColor(180, 0, 0)
+            
+            p2 = doc.add_paragraph()
+            text_run = p2.add_run(item['sentence'][:400])
+            text_run.font.size = Pt(10)
+            text_run.italic = True
+            
+            doc.add_paragraph()  # spacer
+    
+    # Full chapter text
+    doc.add_heading('Full Chapter Text', level=2)
+    for para_text in chapter_text.split("\n"):
+        if para_text.strip():
+            doc.add_paragraph(para_text)
+    
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
 def display_scorecard(score_result):
     """Renders the scorecard in Streamlit."""
     
@@ -295,12 +447,12 @@ def display_scorecard(score_result):
     else:
         st.success(f"Overall: {overall} — {score_result['red_count']} red, {score_result['yellow_count']} yellow, {score_result['green_count']} green")
     
-    # Metrics table
-    col1, col2, col3 = st.columns(3)
+    # Metrics table — 4 columns to fit 11 metrics
+    col1, col2, col3, col4 = st.columns(4)
     metric_items = list(score_result["metrics"].items())
     
     for i, (name, data) in enumerate(metric_items):
-        target_col = [col1, col2, col3][i % 3]
+        target_col = [col1, col2, col3, col4][i % 4]
         icon = {"GREEN": "\u2705", "YELLOW": "\u26A0\uFE0F", "RED": "\u274C"}[data["level"]]
         target_col.metric(
             label=f"{icon} {name}",
@@ -309,13 +461,11 @@ def display_scorecard(score_result):
             delta_color="normal" if data["level"] == "GREEN" else ("off" if data["level"] == "YELLOW" else "inverse")
         )
     
-    # Summary stats
     s = score_result["summary"]
     st.caption(f"{s['total_sentences']} sentences | Mean length: {s['mean_sentence_length']} words | "
                f"{s['flagged_sentences']} flagged ({round(100*s['flagged_sentences']/max(s['total_sentences'],1))}%) | "
-               f"Dialogue: {s['dialogue_word_pct']}% of words")
+               f"Dialogue: {s['dialogue_word_pct']}% | Similes: {s['simile_total']}")
     
-    # Flagged passages
     flagged = score_result["flagged"]
     if flagged:
         with st.expander(f"Flagged Passages ({len(flagged)} sentences)", expanded=False):
@@ -410,15 +560,15 @@ if "revision_history" not in st.session_state:
     st.session_state.revision_history = []
 if "current_pass" not in st.session_state:
     st.session_state.current_pass = 0
+if "reports" not in st.session_state:
+    st.session_state.reports = []
 
 
 def call_api(client, message_text, is_revision=False):
     """Makes an API call with the current settings."""
     
-    # Determine model for revisions
     if is_revision and revision_model_choice != "Same as writing model":
         rev_model = model_map.get(revision_model_choice, model_id)
-        # Revisions always use standard mode (no extended thinking)
         response = client.messages.create(
             model=rev_model,
             max_tokens=max_tokens,
@@ -513,10 +663,15 @@ if st.button("Write Chapter", type="primary"):
                     st.session_state.chapter_text = chapter_text
                     st.session_state.revision_history = [{"pass": 0, "text": chapter_text, "label": "Original"}]
                     st.session_state.current_pass = 0
+                    st.session_state.reports = []
                     
                     # Score it
                     score_result = score_chapter(chapter_text)
                     st.session_state.score_result = score_result
+                    
+                    # Generate report
+                    report_buf = generate_report(score_result, chapter_text, "Original", 0)
+                    st.session_state.reports.append({"label": "Original", "buffer": report_buf})
                     
                     # Display
                     st.markdown("---")
@@ -526,14 +681,24 @@ if st.button("Write Chapter", type="primary"):
                     st.markdown("### Chapter Text")
                     st.text(chapter_text)
                     
-                    # Download
-                    buffer = make_docx(chapter_text)
-                    st.download_button(
-                        label="Download Original (.docx)",
-                        data=buffer,
-                        file_name="chapter_original.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    )
+                    # Downloads
+                    dcol1, dcol2 = st.columns(2)
+                    with dcol1:
+                        buffer = make_docx(chapter_text)
+                        st.download_button(
+                            label="Download Original (.docx)",
+                            data=buffer,
+                            file_name="chapter_original.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        )
+                    with dcol2:
+                        st.download_button(
+                            label="Download Original Report (.docx)",
+                            data=st.session_state.reports[-1]["buffer"],
+                            file_name="report_original.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key="report_dl_orig"
+                        )
                     
                     # Auto-revise if enabled and score is not low risk
                     if auto_revise and score_result["overall"] != "LOW RISK":
@@ -566,11 +731,16 @@ if st.button("Write Chapter", type="primary"):
                             # Score the revision
                             new_score = score_chapter(revised_text)
                             
+                            # Generate report
+                            rev_label = f"Revision {pass_num}"
+                            report_buf = generate_report(new_score, revised_text, rev_label, pass_num)
+                            st.session_state.reports.append({"label": rev_label, "buffer": report_buf})
+                            
                             # Store history
                             st.session_state.revision_history.append({
                                 "pass": pass_num,
                                 "text": revised_text,
-                                "label": f"Revision {pass_num}"
+                                "label": rev_label
                             })
                             
                             # Display comparison
@@ -587,6 +757,26 @@ if st.button("Write Chapter", type="primary"):
                             
                             display_scorecard(new_score)
                             
+                            # Download buttons for this pass
+                            pcol1, pcol2 = st.columns(2)
+                            with pcol1:
+                                rev_buf = make_docx(revised_text)
+                                st.download_button(
+                                    label=f"Download {rev_label} (.docx)",
+                                    data=rev_buf,
+                                    file_name=f"chapter_revision_{pass_num}.docx",
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    key=f"ch_dl_{pass_num}"
+                                )
+                            with pcol2:
+                                st.download_button(
+                                    label=f"Download {rev_label} Report (.docx)",
+                                    data=st.session_state.reports[-1]["buffer"],
+                                    file_name=f"report_revision_{pass_num}.docx",
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    key=f"report_dl_{pass_num}"
+                                )
+                            
                             current_text = revised_text
                             current_score = new_score
                             st.session_state.chapter_text = current_text
@@ -601,9 +791,9 @@ if st.button("Write Chapter", type="primary"):
                         
                         buffer = make_docx(current_text)
                         st.download_button(
-                            label="Download Revised (.docx)",
+                            label="Download Final Revised (.docx)",
                             data=buffer,
-                            file_name="chapter_revised.docx",
+                            file_name="chapter_final_revised.docx",
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                         )
             
@@ -629,6 +819,16 @@ if st.button("Score This Text"):
         display_scorecard(score_result)
         st.session_state.chapter_text = pasted_text
         st.session_state.score_result = score_result
+        
+        # Generate and offer report download
+        report_buf = generate_report(score_result, pasted_text, "Pasted Text", 0)
+        st.download_button(
+            label="Download Score Report (.docx)",
+            data=report_buf,
+            file_name="report_pasted.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="report_pasted"
+        )
     else:
         st.warning("Paste some text first.")
 
@@ -657,13 +857,24 @@ if st.button("Revise This Text"):
                         display_scorecard(new_score)
                         st.text(revised_text)
                         
-                        buffer = make_docx(revised_text)
-                        st.download_button(
-                            label="Download Revised (.docx)",
-                            data=buffer,
-                            file_name="chapter_revised.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        )
+                        rcol1, rcol2 = st.columns(2)
+                        with rcol1:
+                            buffer = make_docx(revised_text)
+                            st.download_button(
+                                label="Download Revised (.docx)",
+                                data=buffer,
+                                file_name="chapter_revised.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            )
+                        with rcol2:
+                            report_buf = generate_report(new_score, revised_text, "Revised (Pasted)", 1)
+                            st.download_button(
+                                label="Download Revised Report (.docx)",
+                                data=report_buf,
+                                file_name="report_revised.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                key="report_revised_pasted"
+                            )
                 except Exception as e:
                     st.error(f"Error: {e}")
 
@@ -679,11 +890,24 @@ if st.session_state.revision_history and len(st.session_state.revision_history) 
     for entry in st.session_state.revision_history:
         with st.expander(f"{entry['label']} ({len(entry['text'].split()):,} words)"):
             st.text(entry["text"][:2000] + ("..." if len(entry["text"]) > 2000 else ""))
-            buffer = make_docx(entry["text"])
-            st.download_button(
-                label=f"Download {entry['label']}",
-                data=buffer,
-                file_name=f"chapter_{entry['label'].lower().replace(' ', '_')}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key=f"dl_{entry['pass']}"
-            )
+            dcol1, dcol2 = st.columns(2)
+            with dcol1:
+                buffer = make_docx(entry["text"])
+                st.download_button(
+                    label=f"Download {entry['label']}",
+                    data=buffer,
+                    file_name=f"chapter_{entry['label'].lower().replace(' ', '_')}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key=f"dl_{entry['pass']}"
+                )
+            with dcol2:
+                # Find matching report
+                matching_reports = [r for r in st.session_state.reports if r["label"] == entry["label"]]
+                if matching_reports:
+                    st.download_button(
+                        label=f"Download {entry['label']} Report",
+                        data=matching_reports[0]["buffer"],
+                        file_name=f"report_{entry['label'].lower().replace(' ', '_')}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key=f"rdl_{entry['pass']}"
+                    )
